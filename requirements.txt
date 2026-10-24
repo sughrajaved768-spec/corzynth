@@ -1,0 +1,10 @@
+streamlit
+streamlit-authenticator
+pandas
+numpy
+joblib
+scikit-learn
+plotly
+folium
+streamlit-folium
+python-docx
