@@ -22,7 +22,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "Corzynth v9.4"
+APP_VERSION = "Corzynth v10.1"
 BRAND = "Corzynth"
 DEVELOPER = "E. Vellay"
 LOGO_FILE = "corzynth_logo.jpeg"
@@ -37,9 +37,10 @@ def load_corrosion_model():
         st.error("⚠️ Corrosion model file not found. Ensure 'corrosion_model.joblib' is in the project folder.")
         st.stop()
 
-
 @st.cache_data
 def load_uploaded_csv(file):
+    if file.name.lower().endswith((".xlsx", ".xls")):
+        return pd.read_excel(file)
     return pd.read_csv(file)
 
 # ---------------- LOGIN / START PAGE ----------------
@@ -94,7 +95,6 @@ if not st.session_state.get("authentication_status"):
     </style>
     """, unsafe_allow_html=True)
 
-    # Corzynth logo — top center of login page
     logo_col, empty1, empty2 = st.columns([1, 2, 1])
     with logo_col:
         try:
@@ -172,7 +172,6 @@ username = st.session_state["username"]
 user_name = st.session_state["name"]
 user_role = st.secrets["credentials"]["usernames"][username]["role"]
 
-# Sidebar logo — top of sidebar
 sidebar_logo_col, sidebar_empty = st.sidebar.columns([1, 0.3])
 with sidebar_logo_col:
     try:
@@ -183,6 +182,7 @@ with sidebar_logo_col:
 st.sidebar.success(f"Logged in: {user_name}")
 st.sidebar.info(f"Role: {user_role.title()}")
 st.sidebar.caption(APP_VERSION)
+st.sidebar.info("🔬 PILOT PROGRAM — Evaluation Build")
 
 # ---------------- CORZYNTH THEME ----------------
 
@@ -228,6 +228,11 @@ section[data-testid="stSidebar"] * { color: #e6edf3 !important; }
     padding: 22px;
     border-top: 4px solid #18a999;
     height: 100%;
+    transition: all 0.2s ease;
+}
+.kpi-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 18px rgba(11,61,98,0.12);
 }
 .kpi-value { font-size: 1.55rem; font-weight: 800; color: #0b3d62; }
 .kpi-label { font-size: 0.88rem; font-weight: 600; color: #334155; margin-top: 6px; }
@@ -262,7 +267,6 @@ section[data-testid="stSidebar"] * { color: #e6edf3 !important; }
 
 # ---------------- HEADER ----------------
 
-# Corzynth logo — top center of dashboard
 logo_col, empty1, empty2 = st.columns([1, 2, 1])
 with logo_col:
     try:
@@ -311,17 +315,14 @@ def add_report_figure(title, figure):
         st.session_state["report_figures"] = []
     st.session_state["report_figures"].append({"title": title, "figure": figure})
 
-
 def clear_report_figures():
     st.session_state["report_figures"] = []
-
 
 def convert_figure_to_png(figure):
     try:
         return figure.to_image(format="png", width=1400, height=800, scale=2)
     except Exception:
         return None
-
 
 def create_word_report(title, summary_text, data_frame, interpretation_points, recommendation_points):
     document = Document()
@@ -379,7 +380,6 @@ def create_word_report(title, summary_text, data_frame, interpretation_points, r
     buffer.seek(0)
     return buffer
 
-
 def download_reports(data_frame, csv_name, word_title, summary_text, interpretation_points, recommendation_points, key_prefix):
     csv_data = data_frame.to_csv(index=False).encode("utf-8")
     st.download_button(
@@ -407,7 +407,6 @@ def classify_corrosion_risk(rate):
         return "Medium"
     return "High"
 
-
 def calculate_likelihood_score(row, predicted_rate):
     score = min(predicted_rate / 0.5, 1.0) * 0.40
     if "Soil_Resistivity_ohm_m" in row:
@@ -423,7 +422,6 @@ def calculate_likelihood_score(row, predicted_rate):
         score += 0.05
     return min(score, 1.0)
 
-
 def calculate_consequence_score(row):
     score = 0.30
     if "Operating_Pressure_bar" in row:
@@ -436,7 +434,6 @@ def calculate_consequence_score(row):
         score += sensitivity.get(row["Environmental_Sensitivity"], 0.5) * 0.1
     return min(score, 1.0)
 
-
 def classify_overall_risk(risk_score, corrosion_risk):
     adjustment = {"Low": 0, "Medium": 0.25, "High": 0.5, "Critical": 0.75}
     score = min(risk_score + adjustment.get(corrosion_risk, 0), 1)
@@ -448,10 +445,8 @@ def classify_overall_risk(risk_score, corrosion_risk):
         return "High"
     return "Critical"
 
-
 def get_priority(risk_level):
     return {"Low": "Routine", "Medium": "Planned", "High": "High", "Critical": "Critical"}.get(risk_level, "Routine")
-
 
 def get_recommended_action(risk_level, remaining_life):
     if risk_level == "Critical":
@@ -462,20 +457,25 @@ def get_recommended_action(risk_level, remaining_life):
         return "Scheduled inspection and inhibitor review"
     return "Routine monitoring"
 
+# ---------------- INHIBITOR MODEL ----------------
 
-def apply_inhibitor_efficiency(base_rate, dose):
-    if dose <= 0:
-        efficiency = 0
-    elif dose <= 25:
-        efficiency = dose / 25 * 0.45
-    elif dose <= 50:
-        efficiency = 0.45 + (dose - 25) / 25 * 0.25
-    elif dose <= 100:
-        efficiency = 0.70 + (dose - 50) / 50 * 0.15
+INHIBITOR_EFFICIENCY = {
+    "None": 0.0,
+    "Imidazoline": 0.90,
+    "Amine-based": 0.85,
+    "Phosphate Ester": 0.80,
+    "Other": 0.75
+}
+
+def apply_inhibitor_efficiency(base_rate, dose, inhibitor_type="Imidazoline", residual_ppm=None):
+    max_eff = INHIBITOR_EFFICIENCY.get(inhibitor_type, 0.75)
+    if dose <= 0 or max_eff == 0:
+        efficiency = 0.0
     else:
-        efficiency = min(0.85 + (dose - 100) / 100 * 0.05, 0.90)
+        dose_factor = dose / (dose + 25)
+        residual_factor = 1.0 if residual_ppm is None else min(residual_ppm / max(dose, 1), 1.0)
+        efficiency = max_eff * dose_factor * residual_factor
     return base_rate * (1 - efficiency), efficiency
-
 
 def prepare_model_input(row, model):
     row_data = pd.DataFrame([row])
@@ -485,14 +485,12 @@ def prepare_model_input(row, model):
             row_data[feature] = 0
     return row_data[model.feature_names_in_]
 
-
 def encode_batch_data(batch_data, model):
     encoded = pd.get_dummies(batch_data)
     for feature in model.feature_names_in_:
         if feature not in encoded.columns:
             encoded[feature] = 0
     return encoded[model.feature_names_in_]
-
 
 def get_required_base_columns(model):
     categorical_prefixes = ["Coating_Type", "Coating_Condition", "Cathodic_Protection", "Material_Grade"]
@@ -552,6 +550,35 @@ if page == "🏠 Dashboard":
         </div>
         """, unsafe_allow_html=True)
 
+    st.markdown('<div class="section-title">Session Status</div>', unsafe_allow_html=True)
+
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+
+    with col_s1:
+        if "batch_results" in st.session_state:
+            st.metric("Batch Segments", len(st.session_state["batch_results"]))
+        else:
+            st.metric("Batch Segments", "—")
+
+    with col_s2:
+        if "batch_results" in st.session_state:
+            crit = (st.session_state["batch_results"]["Overall_Risk_Level"] == "Critical").sum()
+            st.metric("Critical Segments", crit)
+        else:
+            st.metric("Critical Segments", "—")
+
+    with col_s3:
+        if "geo_results" in st.session_state:
+            st.metric("Geo Segments", len(st.session_state["geo_results"]))
+        else:
+            st.metric("Geo Segments", "—")
+
+    with col_s4:
+        if "single_prediction" in st.session_state:
+            st.metric("Last Prediction", f"{st.session_state['single_prediction']['corrosion_rate']:.3f} mm/yr")
+        else:
+            st.metric("Last Prediction", "—")
+
     st.markdown('<div class="section-title">Platform Modules</div>', unsafe_allow_html=True)
 
     modules = pd.DataFrame({
@@ -581,30 +608,7 @@ if page == "🏠 Dashboard":
     })
 
     st.dataframe(modules, use_container_width=True, hide_index=True)
-
-    st.markdown('<div class="section-title">Session Status</div>', unsafe_allow_html=True)
-
-    col_s1, col_s2, col_s3 = st.columns(3)
-
-    with col_s1:
-        if "batch_results" in st.session_state:
-            st.success(f"Batch results: {len(st.session_state['batch_results'])} segments")
-        else:
-            st.info("No batch results yet — run Batch Prediction.")
-
-    with col_s2:
-        if "geo_results" in st.session_state:
-            st.success(f"Geophysical results: {len(st.session_state['geo_results'])} segments")
-        else:
-            st.info("No geophysical results yet — run Geophysical Analysis.")
-
-    with col_s3:
-        if "single_prediction" in st.session_state:
-            st.success("Single prediction available")
-        else:
-            st.info("No single prediction yet.")
-
-# ---------------- SINGLE PREDICTION ----------------
+    # ---------------- SINGLE PREDICTION ----------------
 
 elif page == "🧪 Single Prediction":
 
@@ -634,6 +638,9 @@ elif page == "🧪 Single Prediction":
     with col3:
         Cathodic_Protection = st.selectbox("Cathodic protection", ["Yes", "No"])
         CP_Potential_mV = st.number_input("CP potential (mV)", value=-950.0)
+        Inhibitor_Type = st.selectbox("Inhibitor type",
+            ["Imidazoline", "Amine-based", "Phosphate Ester", "Other", "None"])
+        Residual_Inhibitor_ppm = st.number_input("Residual inhibitor (ppm)", min_value=0.0, value=25.0)
         Inhibitor_Dose_ppm = st.number_input("Current inhibitor dose (ppm)", min_value=0.0, value=25.0)
         Service_Years = st.number_input("Service years", min_value=0.0, value=10.0)
         Pipe_Wall_Thickness_mm = st.number_input("Pipe wall thickness (mm)", min_value=0.1, value=8.5)
@@ -677,9 +684,14 @@ elif page == "🧪 Single Prediction":
     if "single_prediction" in st.session_state:
         prediction = st.session_state["single_prediction"]
 
-        st.metric("Predicted Corrosion Rate", f"{prediction['corrosion_rate']:.4f} mm/year")
-        st.metric("Corrosion Risk", prediction["corrosion_risk"])
-        st.metric("Estimated Remaining Life", f"{prediction['remaining_life']:.1f} years")
+        col_m1, col_m2, col_m3 = st.columns(3)
+        with col_m1:
+            st.metric("Predicted Corrosion Rate", f"{prediction['corrosion_rate']:.4f} mm/year")
+        with col_m2:
+            st.metric("Corrosion Risk", prediction["corrosion_risk"])
+        with col_m3:
+            st.metric("Estimated Remaining Life", f"{prediction['remaining_life']:.1f} years")
+
         st.success(f"Overall integrity risk level: {prediction['overall_risk']}")
         st.info(get_recommended_action(prediction["overall_risk"], prediction["remaining_life"]))
 
@@ -689,9 +701,13 @@ elif page == "🧪 Single Prediction":
             doses = list(range(0, 201, 5))
             results = []
             for dose in doses:
-                adjusted_rate, efficiency = apply_inhibitor_efficiency(prediction["corrosion_rate"], dose)
+                adjusted_rate, efficiency = apply_inhibitor_efficiency(
+                    prediction["corrosion_rate"], dose, Inhibitor_Type, Residual_Inhibitor_ppm
+                )
                 results.append({
                     "Inhibitor_Dose_ppm": dose,
+                    "Inhibitor_Type": Inhibitor_Type,
+                    "Residual_Inhibitor_ppm": Residual_Inhibitor_ppm,
                     "Inhibitor_Efficiency_percent": round(efficiency * 100, 1),
                     "Predicted_Corrosion_Rate_mm_year": round(adjusted_rate, 4)
                 })
@@ -700,14 +716,14 @@ elif page == "🧪 Single Prediction":
             suitable = optimization_df[optimization_df["Predicted_Corrosion_Rate_mm_year"] <= target_rate]
 
             fig = px.line(optimization_df, x="Inhibitor_Dose_ppm", y="Predicted_Corrosion_Rate_mm_year",
-                          markers=True, title="Inhibitor Dose Optimization")
+                          markers=True, title=f"Inhibitor Dose Optimization ({Inhibitor_Type})")
             fig.add_hline(y=target_rate, line_dash="dash")
             st.plotly_chart(fig, use_container_width=True)
             add_report_figure("Inhibitor Dose Optimization", fig)
 
             if not suitable.empty:
                 best = suitable.iloc[0]
-                st.success(f"Recommended minimum inhibitor dose: {best['Inhibitor_Dose_ppm']:.0f} ppm")
+                st.success(f"Recommended minimum inhibitor dose: {best['Inhibitor_Dose_ppm']:.0f} ppm ({Inhibitor_Type})")
                 st.info(f"Predicted corrosion rate: {best['Predicted_Corrosion_Rate_mm_year']:.4f} mm/year")
                 report_df = suitable
             else:
@@ -719,9 +735,9 @@ elif page == "🧪 Single Prediction":
             download_reports(
                 report_df, "Corzynth_Inhibitor_Optimization_Report.csv",
                 "Corzynth Inhibitor Optimization Report",
-                f"Inhibitor dose optimization was performed for target corrosion rate {target_rate:.4f} mm/year.",
-                ["Inhibitor dose was tested from 0 to 200 ppm.", "Efficiency was applied to the predicted base corrosion rate."],
-                ["Apply the recommended inhibitor dose.", "Monitor corrosion performance after implementation."],
+                f"Inhibitor dose optimization was performed for {Inhibitor_Type} with target corrosion rate {target_rate:.4f} mm/year.",
+                ["Inhibitor dose was tested from 0 to 200 ppm.", "Efficiency was adjusted by inhibitor type and residual concentration."],
+                ["Apply the recommended inhibitor dose.", "Monitor residual inhibitor levels after implementation."],
                 "single_inhibitor"
             )
 
@@ -734,7 +750,36 @@ elif page == "⚙️ Batch Prediction":
 
     st.markdown('<div class="section-title">Batch Pipeline Corrosion Prediction</div>', unsafe_allow_html=True)
 
-    uploaded_batch = st.file_uploader("Upload Pipeline Batch CSV", type=["csv"])
+    st.markdown("#### 📥 Need a data template?")
+    template = pd.DataFrame({
+        "Segment_ID": ["SEG-001", "SEG-002"],
+        "H2S_ppm": [50, 80],
+        "CO2_percent": [3.5, 4.0],
+        "Operating_Pressure_bar": [45, 50],
+        "Operating_Temperature_C": [60, 65],
+        "pH": [6.5, 6.2],
+        "Chlorides_mg_L": [15000, 18000],
+        "TDS_mg_L": [25000, 28000],
+        "Soil_Resistivity_ohm_m": [1200, 800],
+        "Soil_pH": [7.2, 6.8],
+        "Moisture_Content_percent": [18, 25],
+        "Coating_Type": ["FBE", "3LPE"],
+        "Coating_Condition": ["Good", "Fair"],
+        "Cathodic_Protection": ["Yes", "No"],
+        "CP_Potential_mV": [-950, -850],
+        "Inhibitor_Dose_ppm": [25, 30],
+        "Service_Years": [10, 15],
+        "Pipe_Wall_Thickness_mm": [8.5, 8.5],
+        "Material_Grade": ["API 5L X52", "API 5L X52"]
+    })
+    st.download_button(
+        "📥 Download Batch Data Template (CSV)",
+        template.to_csv(index=False).encode("utf-8"),
+        "Corzynth_Batch_Data_Template.csv",
+        "text/csv"
+    )
+
+    uploaded_batch = st.file_uploader("Upload Pipeline Batch CSV or Excel", type=["csv", "xlsx"])
 
     if uploaded_batch is not None:
         batch_data = load_uploaded_csv(uploaded_batch)
@@ -787,10 +832,15 @@ elif page == "⚙️ Batch Prediction":
         if "batch_results" in st.session_state:
             results_df = st.session_state["batch_results"]
 
-            st.metric("Total Segments", len(results_df))
-            st.metric("Critical Segments", (results_df["Overall_Risk_Level"] == "Critical").sum())
-            st.metric("High-Risk Segments", (results_df["Overall_Risk_Level"] == "High").sum())
-            st.metric("Average Remaining Life", f"{results_df['Estimated_Remaining_Life_years'].mean():.1f} years")
+            col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+            with col_b1:
+                st.metric("Total Segments", len(results_df))
+            with col_b2:
+                st.metric("Critical Segments", (results_df["Overall_Risk_Level"] == "Critical").sum())
+            with col_b3:
+                st.metric("High-Risk Segments", (results_df["Overall_Risk_Level"] == "High").sum())
+            with col_b4:
+                st.metric("Average Remaining Life", f"{results_df['Estimated_Remaining_Life_years'].mean():.1f} years")
 
             st.dataframe(results_df, use_container_width=True)
 
@@ -924,9 +974,13 @@ elif page == "🧠 Explainable AI":
         segment_id = st.selectbox("Select Segment to Explain", results_df["Segment_ID"].tolist())
         segment = results_df[results_df["Segment_ID"] == segment_id].iloc[0]
 
-        st.metric("Predicted Corrosion Rate", f"{segment['Predicted_Corrosion_Rate_mm_year']:.4f} mm/year")
-        st.metric("Overall Risk Level", segment["Overall_Risk_Level"])
-        st.metric("Remaining Life", f"{segment['Estimated_Remaining_Life_years']:.1f} years")
+        col_e1, col_e2, col_e3 = st.columns(3)
+        with col_e1:
+            st.metric("Predicted Corrosion Rate", f"{segment['Predicted_Corrosion_Rate_mm_year']:.4f} mm/year")
+        with col_e2:
+            st.metric("Overall Risk Level", segment["Overall_Risk_Level"])
+        with col_e3:
+            st.metric("Remaining Life", f"{segment['Estimated_Remaining_Life_years']:.1f} years")
         st.info(segment["Recommended_Action"])
 
         download_reports(
@@ -937,7 +991,6 @@ elif page == "🧠 Explainable AI":
             [segment["Recommended_Action"], "Validate explanation with field inspection data."],
             "explainable_ai"
         )
-
 # ---------------- GEOPHYSICAL ANALYSIS ----------------
 
 elif page == "🌍 Geophysical Analysis":
@@ -946,7 +999,7 @@ elif page == "🌍 Geophysical Analysis":
 
     st.markdown('<div class="section-title">Detailed Geophysical Analysis and GIS Risk Mapping</div>', unsafe_allow_html=True)
 
-    uploaded_geo = st.file_uploader("Upload Geophysical CSV", type=["csv"])
+    uploaded_geo = st.file_uploader("Upload Geophysical CSV or Excel", type=["csv", "xlsx"])
 
     if uploaded_geo is not None:
         geo = load_uploaded_csv(uploaded_geo)
@@ -972,10 +1025,15 @@ elif page == "🌍 Geophysical Analysis":
 
         st.session_state["geo_results"] = geo.copy()
 
-        st.metric("Total Segments", len(geo))
-        st.metric("High-Risk Segments", (geo["Geophysical_Risk_Level"] == "High").sum())
-        st.metric("Medium-Risk Segments", (geo["Geophysical_Risk_Level"] == "Medium").sum())
-        st.metric("Low-Risk Segments", (geo["Geophysical_Risk_Level"] == "Low").sum())
+        col_g1, col_g2, col_g3, col_g4 = st.columns(4)
+        with col_g1:
+            st.metric("Total Segments", len(geo))
+        with col_g2:
+            st.metric("High-Risk Segments", (geo["Geophysical_Risk_Level"] == "High").sum())
+        with col_g3:
+            st.metric("Medium-Risk Segments", (geo["Geophysical_Risk_Level"] == "Medium").sum())
+        with col_g4:
+            st.metric("Low-Risk Segments", (geo["Geophysical_Risk_Level"] == "Low").sum())
 
         risk_colors = {"Low": "#2ea043", "Medium": "#d29922", "High": "#cf222e"}
 
@@ -1021,7 +1079,6 @@ elif page == "🌍 Geophysical Analysis":
         zone_risk = geo.groupby("AI_Risk_Zone")["Geophysical_Risk_Score"].mean()
         highest_zone = zone_risk.idxmax()
         zone_names = {}
-
         for zone in sorted(geo["AI_Risk_Zone"].unique()):
             if zone == highest_zone:
                 zone_names[zone] = "Critical Hotspot Zone"
@@ -1109,8 +1166,14 @@ elif page == "🔮 What-If Scenario Simulator":
         new_pressure = st.number_input("Proposed pressure (bar)", min_value=0.0, value=45.0)
 
     with col3:
+        current_inhibitor_type = st.selectbox("Current inhibitor type",
+            ["Imidazoline", "Amine-based", "Phosphate Ester", "Other", "None"])
         current_inhibitor = st.number_input("Current inhibitor dose (ppm)", min_value=0.0, value=10.0)
+        current_residual = st.number_input("Current residual inhibitor (ppm)", min_value=0.0, value=10.0)
+        proposed_inhibitor_type = st.selectbox("Proposed inhibitor type",
+            ["Imidazoline", "Amine-based", "Phosphate Ester", "Other", "None"])
         proposed_inhibitor = st.number_input("Proposed inhibitor dose (ppm)", min_value=0.0, value=30.0)
+        proposed_residual = st.number_input("Proposed residual inhibitor (ppm)", min_value=0.0, value=30.0)
         current_coating = st.selectbox("Current coating condition", ["Poor", "Fair", "Good", "Excellent"], index=1)
         proposed_coating = st.selectbox("Proposed coating condition", ["Poor", "Fair", "Good", "Excellent"], index=2)
         cp_status = st.selectbox("Cathodic protection", ["Yes", "No"])
@@ -1140,8 +1203,8 @@ elif page == "🔮 What-If Scenario Simulator":
         base_rate = model.predict(prepare_model_input(base_input, model))[0]
         new_rate = model.predict(prepare_model_input(new_input, model))[0]
 
-        base_rate, _ = apply_inhibitor_efficiency(base_rate, current_inhibitor)
-        new_rate, _ = apply_inhibitor_efficiency(new_rate, proposed_inhibitor)
+        base_rate, _ = apply_inhibitor_efficiency(base_rate, current_inhibitor, current_inhibitor_type, current_residual)
+        new_rate, _ = apply_inhibitor_efficiency(new_rate, proposed_inhibitor, proposed_inhibitor_type, proposed_residual)
 
         available_wall = wall_thickness - minimum_thickness
         base_life = available_wall / base_rate if base_rate > 0 else 0
@@ -1168,7 +1231,7 @@ elif page == "🔮 What-If Scenario Simulator":
             comparison_df, "Corzynth_What_If_Scenario_Report.csv",
             "Corzynth What-If Corrosion Scenario Report",
             f"Current corrosion rate is {base_rate:.4f} mm/year. Proposed strategy reduces it to {new_rate:.4f} mm/year.",
-            ["Current and proposed conditions were compared.", "Inhibitor efficiency was applied to both scenarios."],
+            ["Current and proposed conditions were compared.", "Inhibitor type, dose, and residual concentration were applied to both scenarios."],
             ["Implement the proposed strategy if improvement is acceptable.", "Validate with field corrosion monitoring."],
             "what_if"
         )
@@ -1354,7 +1417,7 @@ elif page == "📊 Model Performance":
 
     st.markdown('<div class="section-title">Machine Learning Model Performance</div>', unsafe_allow_html=True)
 
-    uploaded_test = st.file_uploader("Upload Model Test Dataset", type=["csv"])
+    uploaded_test = st.file_uploader("Upload Model Test Dataset", type=["csv", "xlsx"])
 
     if uploaded_test is not None:
         test_data = load_uploaded_csv(uploaded_test)
@@ -1407,7 +1470,7 @@ elif page == "📈 Corrosion Trend Analyzer":
 
     st.markdown('<div class="section-title">Corrosion Trend Analyzer</div>', unsafe_allow_html=True)
 
-    uploaded_trend = st.file_uploader("Upload Historical Corrosion Trend CSV", type=["csv"])
+    uploaded_trend = st.file_uploader("Upload Historical Corrosion Trend CSV or Excel", type=["csv", "xlsx"])
 
     if uploaded_trend is not None:
         trend_data = load_uploaded_csv(uploaded_trend)
@@ -1525,7 +1588,7 @@ elif page == "🗺️ Pipeline Route Risk Map":
         "Corzynth will draw the pipeline route and color it by corrosion or geophysical risk."
     )
 
-    uploaded_route = st.file_uploader("Upload Pipeline Route CSV", type=["csv"], key="route_upload")
+    uploaded_route = st.file_uploader("Upload Pipeline Route CSV or Excel", type=["csv", "xlsx"], key="route_upload")
 
     if uploaded_route is not None:
 
@@ -1703,8 +1766,11 @@ elif page == "🔔 Alerts & Notifications":
         alerts_df["Severity_Order"] = alerts_df["Severity"].map(severity_order)
         alerts_df = alerts_df.sort_values(by=["Severity_Order", "Segment_ID"]).drop(columns=["Severity_Order"])
 
-        st.metric("Critical Alerts", (alerts_df["Severity"] == "🔴 Critical").sum())
-        st.metric("High Alerts", (alerts_df["Severity"] == "🟠 High").sum())
+        col_a1, col_a2 = st.columns(2)
+        with col_a1:
+            st.metric("Critical Alerts", (alerts_df["Severity"] == "🔴 Critical").sum())
+        with col_a2:
+            st.metric("High Alerts", (alerts_df["Severity"] == "🟠 High").sum())
 
         st.dataframe(alerts_df, use_container_width=True)
 
@@ -1773,10 +1839,10 @@ elif page == "📖 User Guide":
 
     st.write("""
     ### 🧪 Single Prediction
-    Predict corrosion, remaining life, overall risk, and optimize inhibitor dose.
+    Predict corrosion, remaining life, overall risk, and optimize inhibitor dose by inhibitor type and residual concentration.
 
     ### ⚙️ Batch Prediction
-    Upload a CSV with many pipeline segments and predict corrosion and risk for all of them.
+    Upload a CSV or Excel file with many pipeline segments and predict corrosion and risk for all of them. Download the data template first.
 
     ### 🎯 Risk Intelligence
     Review likelihood, consequence, overall risk, highest-risk segments, and the risk matrix.
@@ -1791,7 +1857,7 @@ elif page == "📖 User Guide":
     Analyze soil corrosivity, moisture, pH, groundwater, heatmaps, AI hotspots, and GIS risk.
 
     ### 🔮 What-If Scenario Simulator
-    Compare current and proposed inhibitor, coating, pressure, temperature, and protection strategies.
+    Compare current and proposed inhibitor type, dose, residual level, coating, pressure, temperature, and protection strategies.
 
     ### 📅 RBI Interval Optimizer
     Calculate optimized inspection intervals and next inspection dates.
