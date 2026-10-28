@@ -626,12 +626,16 @@ elif page == "Single Prediction":
                 st.success(f"✅ Good protection interval: re-dose every {redose_day} days.")
         else:
             st.warning("⚠️ No inhibitor dose entered — residual analysis not available. "
-                       "Enter an inhibitor dose above to see the decay analysis.")
-         
-                # Download Report as Word (Charts + Tables)
+                       "Enter an inhibitor dose above to see the decay analysis.
+                # ============================================================
+        # DOWNLOAD REPORT AS WORD (CHARTS + TABLES) — matplotlib only
+        # ============================================================
         from docx import Document
-        from docx.shared import Inches, Pt
+        from docx.shared import Inches
         import io
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
 
         if st.button("📄 Download Word Report (Charts + Tables)", use_container_width=True):
             doc = Document()
@@ -673,21 +677,35 @@ elif page == "Single Prediction":
             doc.add_heading('3. Corrosion Rate vs Inhibitor Dose', level=1)
             doses = list(range(0, 105, 5))
             rates_plot = [r['rate'] * (1 - min(d / 200, 0.8)) for d in doses]
-            fig1 = px.line(x=doses, y=rates_plot,
-                           labels={'x': 'Inhibitor Dose (ppm)', 'y': 'Corrosion Rate (mm/yr)'},
-                           title='Corrosion Rate vs Inhibitor Dose')
-            img1 = fig1.to_image(format="png", width=900, height=500)
-            doc.add_picture(io.BytesIO(img1), width=Inches(6))
+
+            fig_m1, ax1 = plt.subplots(figsize=(8, 4))
+            ax1.plot(doses, rates_plot, marker='o', color='tab:blue')
+            ax1.set_xlabel('Inhibitor Dose (ppm)')
+            ax1.set_ylabel('Corrosion Rate (mm/yr)')
+            ax1.set_title('Corrosion Rate vs Inhibitor Dose')
+            ax1.grid(True, alpha=0.3)
+            img1 = io.BytesIO()
+            fig_m1.savefig(img1, format='png', bbox_inches='tight')
+            plt.close(fig_m1)
+            img1.seek(0)
+            doc.add_picture(img1, width=Inches(6))
 
             # ================= CHART 2: Residual Decay =================
             doc.add_heading('4. Residual Inhibitor Decay Over Time', level=1)
             days = list(range(0, 91, 5))
             decay = [residual_inhibitor * (0.95 ** (d / 10)) for d in days]
-            fig2 = px.line(x=days, y=decay,
-                           labels={'x': 'Days', 'y': 'Residual Inhibitor (ppm)'},
-                           title='Residual Inhibitor Decay')
-            img2 = fig2.to_image(format="png", width=900, height=500)
-            doc.add_picture(io.BytesIO(img2), width=Inches(6))
+
+            fig_m2, ax2 = plt.subplots(figsize=(8, 4))
+            ax2.plot(days, decay, marker='o', color='tab:orange')
+            ax2.set_xlabel('Days')
+            ax2.set_ylabel('Residual Inhibitor (ppm)')
+            ax2.set_title('Residual Inhibitor Decay Over Time')
+            ax2.grid(True, alpha=0.3)
+            img2 = io.BytesIO()
+            fig_m2.savefig(img2, format='png', bbox_inches='tight')
+            plt.close(fig_m2)
+            img2.seek(0)
+            doc.add_picture(img2, width=Inches(6))
 
             # ================= TABLE 3: Dose Options =================
             doc.add_heading('5. Inhibitor Dose Options', level=1)
@@ -702,7 +720,7 @@ elif page == "Single Prediction":
                 row = table3.add_row().cells
                 row[0].text = f"{d}"
                 row[1].text = f"{rate_d:.4f}"
-                row[2].text = "✅ Yes" if rate_d <= 0.2 else "—"
+                row[2].text = "Yes" if rate_d <= 0.2 else "-"
 
             # ================= Save & Download =================
             buffer = io.BytesIO()
@@ -1393,10 +1411,15 @@ elif page == "Geophysical Analysis":
 
         st.dataframe(geo, use_container_width=True)
         download_csv_button(geo, "Corzynth_Geophysical_Assessment.csv", "geo_csv")
-        # Download Geophysical Report as Word (Charts + Tables)
+                # ============================================================
+        # DOWNLOAD GEOPHYSICAL REPORT AS WORD (CHARTS + TABLES)
+        # ============================================================
         from docx import Document
         from docx.shared import Inches
         import io
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
 
         if st.button("📄 Download Geophysical Report (Word)", use_container_width=True):
             doc = Document()
@@ -1408,43 +1431,63 @@ elif page == "Geophysical Analysis":
             table1 = doc.add_table(rows=5, cols=2)
             table1.style = 'Light Grid Accent 1'
             summary = [
-                ("Total Survey Points", f"{len(gdf)}"),
-                ("Max DCVG (mV)", f"{gdf['DCVG_mV'].max():.1f}"),
-                ("Mean DCVG (mV)", f"{gdf['DCVG_mV'].mean():.1f}"),
-                ("Severe Coating Faults", f"{(gdf['Coating_Fault_Severity']=='Severe').sum()}"),
-                ("Moderate Coating Faults", f"{(gdf['Coating_Fault_Severity']=='Moderate').sum()}"),
+                ("Total Survey Points", f"{len(geo_df)}"),
+                ("Max DCVG (mV)", f"{geo_df['DCVG_mV'].max():.1f}"),
+                ("Mean DCVG (mV)", f"{geo_df['DCVG_mV'].mean():.1f}"),
+                ("Severe Coating Faults", f"{(geo_df['Coating_Fault_Severity'] == 'Severe').sum()}"),
+                ("Moderate Coating Faults", f"{(geo_df['Coating_Fault_Severity'] == 'Moderate').sum()}"),
             ]
             for i, (k, v) in enumerate(summary):
                 table1.rows[i].cells[0].text = k
                 table1.rows[i].cells[1].text = v
 
-            # ================= CHART 1: DCVG along pipeline =================
+            # ================= CHART 1: DCVG Profile =================
             doc.add_heading('2. DCVG (Coating Fault) Profile', level=1)
-            fig_dcv = px.line(gdf, x='Chainage_m', y='DCVG_mV',
-                              title='DCVG (mV) vs Chainage',
-                              labels={'Chainage_m': 'Chainage (m)', 'DCVG_mV': 'DCVG (mV)'})
-            img1 = fig_dcv.to_image(format="png", width=900, height=500)
-            doc.add_picture(io.BytesIO(img1), width=Inches(6))
+            fig_g1, ax_g1 = plt.subplots(figsize=(8, 4))
+            ax_g1.plot(geo_df['Chainage_m'], geo_df['DCVG_mV'], color='tab:red', marker='o', markersize=3)
+            ax_g1.set_xlabel('Chainage (m)')
+            ax_g1.set_ylabel('DCVG (mV)')
+            ax_g1.set_title('DCVG (Coating Fault) vs Chainage')
+            ax_g1.grid(True, alpha=0.3)
+            img_g1 = io.BytesIO()
+            fig_g1.savefig(img_g1, format='png', bbox_inches='tight')
+            plt.close(fig_g1)
+            img_g1.seek(0)
+            doc.add_picture(img_g1, width=Inches(6))
 
-            # ================= CHART 2: CIPS Potential Profile =================
+            # ================= CHART 2: CIPS Profile =================
             doc.add_heading('3. CIPS Potential Profile', level=1)
-            fig_cips = px.line(gdf, x='Chainage_m', y=['CIPS_On_mV', 'CIPS_Off_mV'],
-                               title='CIPS On/Off Potential vs Chainage',
-                               labels={'value': 'Potential (mV)', 'Chainage_m': 'Chainage (m)'})
-            img2 = fig_cips.to_image(format="png", width=900, height=500)
-            doc.add_picture(io.BytesIO(img2), width=Inches(6))
+            fig_g2, ax_g2 = plt.subplots(figsize=(8, 4))
+            ax_g2.plot(geo_df['Chainage_m'], geo_df['CIPS_On_mV'], label='CIPS On', color='tab:blue')
+            ax_g2.plot(geo_df['Chainage_m'], geo_df['CIPS_Off_mV'], label='CIPS Off', color='tab:green')
+            ax_g2.set_xlabel('Chainage (m)')
+            ax_g2.set_ylabel('Potential (mV)')
+            ax_g2.set_title('CIPS On/Off Potential vs Chainage')
+            ax_g2.legend()
+            ax_g2.grid(True, alpha=0.3)
+            img_g2 = io.BytesIO()
+            fig_g2.savefig(img_g2, format='png', bbox_inches='tight')
+            plt.close(fig_g2)
+            img_g2.seek(0)
+            doc.add_picture(img_g2, width=Inches(6))
 
             # ================= CHART 3: Soil Resistivity =================
             doc.add_heading('4. Soil Resistivity Profile', level=1)
-            fig_soil = px.line(gdf, x='Chainage_m', y='Soil_Resistivity_ohm_m',
-                               title='Soil Resistivity vs Chainage',
-                               labels={'Chainage_m': 'Chainage (m)', 'Soil_Resistivity_ohm_m': 'Resistivity (ohm·m)'})
-            img3 = fig_soil.to_image(format="png", width=900, height=500)
-            doc.add_picture(io.BytesIO(img3), width=Inches(6))
+            fig_g3, ax_g3 = plt.subplots(figsize=(8, 4))
+            ax_g3.plot(geo_df['Chainage_m'], geo_df['Soil_Resistivity_ohm_m'], color='tab:purple')
+            ax_g3.set_xlabel('Chainage (m)')
+            ax_g3.set_ylabel('Resistivity (ohm·m)')
+            ax_g3.set_title('Soil Resistivity vs Chainage')
+            ax_g3.grid(True, alpha=0.3)
+            img_g3 = io.BytesIO()
+            fig_g3.savefig(img_g3, format='png', bbox_inches='tight')
+            plt.close(fig_g3)
+            img_g3.seek(0)
+            doc.add_picture(img_g3, width=Inches(6))
 
             # ================= TABLE 2: Top 10 Fault Locations =================
             doc.add_heading('5. Top 10 Coating Fault Locations', level=1)
-            top_faults = gdf.nlargest(10, 'DCVG_mV')[['Chainage_m', 'DCVG_mV', 'Coating_Fault_Severity']]
+            top_faults = geo_df.nlargest(10, 'DCVG_mV')[['Chainage_m', 'DCVG_mV', 'Coating_Fault_Severity']]
             table2 = doc.add_table(rows=1, cols=3)
             table2.style = 'Light Grid Accent 2'
             hdr = table2.rows[0].cells
@@ -1467,7 +1510,6 @@ elif page == "Geophysical Analysis":
                 file_name="Corzynth_Geophysical_Report.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
-
 # ------------------------------------------------------------
 # ALERTS
 # ------------------------------------------------------------
