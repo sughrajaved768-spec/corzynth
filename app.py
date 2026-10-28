@@ -627,6 +627,49 @@ elif page == "Single Prediction":
         else:
             st.warning("⚠️ No inhibitor dose entered — residual analysis not available. "
                        "Enter an inhibitor dose above to see the decay analysis.")
+                               # ------------------------------------------------------------
+        # DOWNLOAD REPORT AS WORD (.docx)
+        # ------------------------------------------------------------
+        from docx import Document
+        from docx.shared import Inches
+        import io
+
+        if st.button("📄 Download Report as Word (.docx)", use_container_width=True):
+            doc = Document()
+            doc.add_heading('Corzynth – Pipeline Corrosion Report', 0)
+
+            doc.add_heading('Pipeline Details', level=1)
+            doc.add_paragraph(f"Pipeline: {pipeline_name}")
+            doc.add_paragraph(f"Diameter: {diameter} mm")
+            doc.add_paragraph(f"Pressure: {pressure} bar")
+            doc.add_paragraph(f"Temperature: {temperature} °C")
+            doc.add_paragraph(f"Soil Type: {soil_type}")
+            doc.add_paragraph(f"CO2: {co2} % | H2S: {h2s} ppm")
+
+            doc.add_heading('Corrosion Results', level=1)
+            doc.add_paragraph(f"Corrosion Rate: {r['rate']:.4f} mm/yr")
+            doc.add_paragraph(f"Remaining Life: {r['life']:.1f} years")
+            doc.add_paragraph(f"Risk Level: {r['risk']}")
+
+            doc.add_heading('Inhibitor Recommendation', level=1)
+            doc.add_paragraph(f"Inhibitor Type: {r['inhibitor_type']}")
+            doc.add_paragraph(f"Current Dose: {r['inhibitor_dose']:.0f} ppm")
+            doc.add_paragraph(f"Residual Inhibitor: {residual_inhibitor:.0f} ppm")
+            doc.add_paragraph(f"Recommended Top-Up Dose: {topup_dose:.0f} ppm")
+
+            doc.add_heading('Explanation', level=1)
+            doc.add_paragraph(explain_text)
+
+            # Save to memory and download
+            buffer = io.BytesIO()
+            doc.save(buffer)
+            buffer.seek(0)
+            st.download_button(
+                label="📥 Click to Save Word Report",
+                data=buffer,
+                file_name=f"Corzynth_Report_{pipeline_name}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
             # ------------------------------------------------------------
 # MONTE CARLO
 # ------------------------------------------------------------
