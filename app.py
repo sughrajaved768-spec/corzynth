@@ -627,11 +627,7 @@ elif page == "Single Prediction":
         else:
             st.warning("⚠️ No inhibitor dose entered — residual analysis not available. "
                        "Enter an inhibitor dose above to see the decay analysis.")
-                               # ------------------------------------------------------------
-        # DOWNLOAD REPORT AS WORD (.docx)
-        # ------------------------------------------------------------
-        from docx import Document
-        from docx.shared import Inches
+                from docx import Document
         import io
 
         if st.button("📄 Download Report as Word (.docx)", use_container_width=True):
@@ -639,12 +635,11 @@ elif page == "Single Prediction":
             doc.add_heading('Corzynth – Pipeline Corrosion Report', 0)
 
             doc.add_heading('Pipeline Details', level=1)
-            doc.add_paragraph(f"Pipeline: {pipeline_name}")
-            doc.add_paragraph(f"Diameter: {diameter} mm")
-            doc.add_paragraph(f"Pressure: {pressure} bar")
-            doc.add_paragraph(f"Temperature: {temperature} °C")
-            doc.add_paragraph(f"Soil Type: {soil_type}")
-            doc.add_paragraph(f"CO2: {co2} % | H2S: {h2s} ppm")
+            doc.add_paragraph(f"Pipeline: {pipeline}")          # ← your variable
+            doc.add_paragraph(f"Diameter: {diameter} mm")       # ← your variable
+            doc.add_paragraph(f"Pressure: {pressure} bar")      # ← your variable
+            doc.add_paragraph(f"Temperature: {temperature} °C") # ← your variable
+            doc.add_paragraph(f"Soil Type: {soil_type}")        # ← your variable
 
             doc.add_heading('Corrosion Results', level=1)
             doc.add_paragraph(f"Corrosion Rate: {r['rate']:.4f} mm/yr")
@@ -652,22 +647,16 @@ elif page == "Single Prediction":
             doc.add_paragraph(f"Risk Level: {r['risk']}")
 
             doc.add_heading('Inhibitor Recommendation', level=1)
-            doc.add_paragraph(f"Inhibitor Type: {r['inhibitor_type']}")
-            doc.add_paragraph(f"Current Dose: {r['inhibitor_dose']:.0f} ppm")
             doc.add_paragraph(f"Residual Inhibitor: {residual_inhibitor:.0f} ppm")
             doc.add_paragraph(f"Recommended Top-Up Dose: {topup_dose:.0f} ppm")
 
-            doc.add_heading('Explanation', level=1)
-            doc.add_paragraph(explain_text)
-
-            # Save to memory and download
             buffer = io.BytesIO()
             doc.save(buffer)
             buffer.seek(0)
             st.download_button(
                 label="📥 Click to Save Word Report",
                 data=buffer,
-                file_name=f"Corzynth_Report_{pipeline_name}.docx",
+                file_name="Corzynth_Report.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
             # ------------------------------------------------------------
