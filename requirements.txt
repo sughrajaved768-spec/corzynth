@@ -8,3 +8,4 @@ plotly
 folium
 streamlit-folium
 python-docx
+kaleido==0.2.1
