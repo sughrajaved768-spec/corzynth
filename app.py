@@ -627,28 +627,26 @@ elif page == "Single Prediction":
         else:
             st.warning("⚠️ No inhibitor dose entered — residual analysis not available. "
                        "Enter an inhibitor dose above to see the decay analysis.")
-                from docx import Document
+         # Download Report as Word
+        from docx import Document
         import io
 
         if st.button("📄 Download Report as Word (.docx)", use_container_width=True):
             doc = Document()
             doc.add_heading('Corzynth – Pipeline Corrosion Report', 0)
 
-            doc.add_heading('Pipeline Details', level=1)
-            doc.add_paragraph(f"Pipeline: {pipeline}")          # ← your variable
-            doc.add_paragraph(f"Diameter: {diameter} mm")       # ← your variable
-            doc.add_paragraph(f"Pressure: {pressure} bar")      # ← your variable
-            doc.add_paragraph(f"Temperature: {temperature} °C") # ← your variable
-            doc.add_paragraph(f"Soil Type: {soil_type}")        # ← your variable
-
             doc.add_heading('Corrosion Results', level=1)
             doc.add_paragraph(f"Corrosion Rate: {r['rate']:.4f} mm/yr")
             doc.add_paragraph(f"Remaining Life: {r['life']:.1f} years")
             doc.add_paragraph(f"Risk Level: {r['risk']}")
+            doc.add_paragraph(f"Wall Thickness: {r['wall']:.2f} mm")
+            doc.add_paragraph(f"Minimum Required Wall: {r['min_wall']:.2f} mm")
 
-            doc.add_heading('Inhibitor Recommendation', level=1)
+            doc.add_heading('Inhibitor & Re-dose', level=1)
+            doc.add_paragraph(f"Inhibitor Type: {inh_type}")
+            doc.add_paragraph(f"Inhibitor Dose: {inh_dose:.0f} ppm")
             doc.add_paragraph(f"Residual Inhibitor: {residual_inhibitor:.0f} ppm")
-            doc.add_paragraph(f"Recommended Top-Up Dose: {topup_dose:.0f} ppm")
+            doc.add_paragraph(f"Re-dose Interval: {redose_day} days")
 
             buffer = io.BytesIO()
             doc.save(buffer)
