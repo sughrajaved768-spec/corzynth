@@ -626,7 +626,7 @@ elif page == "Single Prediction":
                 st.success(f"✅ Good protection interval: re-dose every {redose_day} days.")
         else:
             st.warning("⚠️ No inhibitor dose entered — residual analysis not available. "
-                       "Enter an inhibitor dose above to see the decay analysis.)
+                       "Enter an inhibitor dose above to see the decay analysis.")
                 # ============================================================
         # DOWNLOAD REPORT AS WORD (CHARTS + TABLES) — matplotlib only
         # ============================================================
