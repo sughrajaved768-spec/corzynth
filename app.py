@@ -627,34 +627,91 @@ elif page == "Single Prediction":
         else:
             st.warning("⚠️ No inhibitor dose entered — residual analysis not available. "
                        "Enter an inhibitor dose above to see the decay analysis.")
-         # Download Report as Word
+         
+                # Download Report as Word (Charts + Tables)
         from docx import Document
+        from docx.shared import Inches, Pt
         import io
 
-        if st.button("📄 Download Report as Word (.docx)", use_container_width=True):
+        if st.button("📄 Download Word Report (Charts + Tables)", use_container_width=True):
             doc = Document()
             doc.add_heading('Corzynth – Pipeline Corrosion Report', 0)
+            doc.add_paragraph('AI-Powered Corrosion Prediction & Inhibitor Optimization')
 
-            doc.add_heading('Corrosion Results', level=1)
-            doc.add_paragraph(f"Corrosion Rate: {r['rate']:.4f} mm/yr")
-            doc.add_paragraph(f"Remaining Life: {r['life']:.1f} years")
-            doc.add_paragraph(f"Risk Level: {r['risk']}")
-            doc.add_paragraph(f"Wall Thickness: {r['wall']:.2f} mm")
-            doc.add_paragraph(f"Minimum Required Wall: {r['min_wall']:.2f} mm")
+            # ================= TABLE 1: Corrosion Results =================
+            doc.add_heading('1. Corrosion Results', level=1)
+            table1 = doc.add_table(rows=6, cols=2)
+            table1.style = 'Light Grid Accent 1'
+            data1 = [
+                ("Corrosion Rate", f"{r['rate']:.4f} mm/yr"),
+                ("Remaining Life", f"{r['life']:.1f} years"),
+                ("Risk Level", f"{r['risk']}"),
+                ("Current Wall Thickness", f"{r['wall']:.2f} mm"),
+                ("Minimum Required Wall", f"{r['min_wall']:.2f} mm"),
+                ("Wall Loss Margin", f"{r['wall'] - r['min_wall']:.2f} mm"),
+            ]
+            for i, (k, v) in enumerate(data1):
+                table1.rows[i].cells[0].text = k
+                table1.rows[i].cells[1].text = v
 
-            doc.add_heading('Inhibitor & Re-dose', level=1)
-            doc.add_paragraph(f"Inhibitor Type: {inh_type}")
-            doc.add_paragraph(f"Inhibitor Dose: {inh_dose:.0f} ppm")
-            doc.add_paragraph(f"Residual Inhibitor: {residual_inhibitor:.0f} ppm")
-            doc.add_paragraph(f"Re-dose Interval: {redose_day} days")
+            # ================= TABLE 2: Inhibitor & Re-dose =================
+            doc.add_heading('2. Inhibitor & Re-dose Recommendation', level=1)
+            table2 = doc.add_table(rows=5, cols=2)
+            table2.style = 'Light Grid Accent 2'
+            data2 = [
+                ("Inhibitor Type", f"{inh_type}"),
+                ("Injected Dose", f"{inh_dose:.0f} ppm"),
+                ("Residual Inhibitor", f"{residual_inhibitor:.0f} ppm"),
+                ("Re-dose Interval", f"{redose_day} days"),
+                ("Recommendation", f"Re-dose every {redose_day} days"),
+            ]
+            for i, (k, v) in enumerate(data2):
+                table2.rows[i].cells[0].text = k
+                table2.rows[i].cells[1].text = v
 
+            # ================= CHART 1: Dose vs Corrosion Rate =================
+            doc.add_heading('3. Corrosion Rate vs Inhibitor Dose', level=1)
+            doses = list(range(0, 105, 5))
+            rates_plot = [r['rate'] * (1 - min(d / 200, 0.8)) for d in doses]
+            fig1 = px.line(x=doses, y=rates_plot,
+                           labels={'x': 'Inhibitor Dose (ppm)', 'y': 'Corrosion Rate (mm/yr)'},
+                           title='Corrosion Rate vs Inhibitor Dose')
+            img1 = fig1.to_image(format="png", width=900, height=500)
+            doc.add_picture(io.BytesIO(img1), width=Inches(6))
+
+            # ================= CHART 2: Residual Decay =================
+            doc.add_heading('4. Residual Inhibitor Decay Over Time', level=1)
+            days = list(range(0, 91, 5))
+            decay = [residual_inhibitor * (0.95 ** (d / 10)) for d in days]
+            fig2 = px.line(x=days, y=decay,
+                           labels={'x': 'Days', 'y': 'Residual Inhibitor (ppm)'},
+                           title='Residual Inhibitor Decay')
+            img2 = fig2.to_image(format="png", width=900, height=500)
+            doc.add_picture(io.BytesIO(img2), width=Inches(6))
+
+            # ================= TABLE 3: Dose Options =================
+            doc.add_heading('5. Inhibitor Dose Options', level=1)
+            table3 = doc.add_table(rows=1, cols=3)
+            table3.style = 'Light Grid Accent 3'
+            hdr = table3.rows[0].cells
+            hdr[0].text = "Dose (ppm)"
+            hdr[1].text = "Predicted Rate (mm/yr)"
+            hdr[2].text = "Meets Target?"
+            for d in [0, 25, 50, 75, 100]:
+                rate_d = r['rate'] * (1 - min(d / 200, 0.8))
+                row = table3.add_row().cells
+                row[0].text = f"{d}"
+                row[1].text = f"{rate_d:.4f}"
+                row[2].text = "✅ Yes" if rate_d <= 0.2 else "—"
+
+            # ================= Save & Download =================
             buffer = io.BytesIO()
             doc.save(buffer)
             buffer.seek(0)
             st.download_button(
                 label="📥 Click to Save Word Report",
                 data=buffer,
-                file_name="Corzynth_Report.docx",
+                file_name="Corzynth_Report_Charts_Tables.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
             # ------------------------------------------------------------
@@ -1336,6 +1393,80 @@ elif page == "Geophysical Analysis":
 
         st.dataframe(geo, use_container_width=True)
         download_csv_button(geo, "Corzynth_Geophysical_Assessment.csv", "geo_csv")
+        # Download Geophysical Report as Word (Charts + Tables)
+        from docx import Document
+        from docx.shared import Inches
+        import io
+
+        if st.button("📄 Download Geophysical Report (Word)", use_container_width=True):
+            doc = Document()
+            doc.add_heading('Corzynth – Geophysical Survey Report', 0)
+            doc.add_paragraph('DCVG / CIPS / Soil Resistivity Analysis')
+
+            # ================= TABLE 1: Survey Summary =================
+            doc.add_heading('1. Survey Summary', level=1)
+            table1 = doc.add_table(rows=5, cols=2)
+            table1.style = 'Light Grid Accent 1'
+            summary = [
+                ("Total Survey Points", f"{len(gdf)}"),
+                ("Max DCVG (mV)", f"{gdf['DCVG_mV'].max():.1f}"),
+                ("Mean DCVG (mV)", f"{gdf['DCVG_mV'].mean():.1f}"),
+                ("Severe Coating Faults", f"{(gdf['Coating_Fault_Severity']=='Severe').sum()}"),
+                ("Moderate Coating Faults", f"{(gdf['Coating_Fault_Severity']=='Moderate').sum()}"),
+            ]
+            for i, (k, v) in enumerate(summary):
+                table1.rows[i].cells[0].text = k
+                table1.rows[i].cells[1].text = v
+
+            # ================= CHART 1: DCVG along pipeline =================
+            doc.add_heading('2. DCVG (Coating Fault) Profile', level=1)
+            fig_dcv = px.line(gdf, x='Chainage_m', y='DCVG_mV',
+                              title='DCVG (mV) vs Chainage',
+                              labels={'Chainage_m': 'Chainage (m)', 'DCVG_mV': 'DCVG (mV)'})
+            img1 = fig_dcv.to_image(format="png", width=900, height=500)
+            doc.add_picture(io.BytesIO(img1), width=Inches(6))
+
+            # ================= CHART 2: CIPS Potential Profile =================
+            doc.add_heading('3. CIPS Potential Profile', level=1)
+            fig_cips = px.line(gdf, x='Chainage_m', y=['CIPS_On_mV', 'CIPS_Off_mV'],
+                               title='CIPS On/Off Potential vs Chainage',
+                               labels={'value': 'Potential (mV)', 'Chainage_m': 'Chainage (m)'})
+            img2 = fig_cips.to_image(format="png", width=900, height=500)
+            doc.add_picture(io.BytesIO(img2), width=Inches(6))
+
+            # ================= CHART 3: Soil Resistivity =================
+            doc.add_heading('4. Soil Resistivity Profile', level=1)
+            fig_soil = px.line(gdf, x='Chainage_m', y='Soil_Resistivity_ohm_m',
+                               title='Soil Resistivity vs Chainage',
+                               labels={'Chainage_m': 'Chainage (m)', 'Soil_Resistivity_ohm_m': 'Resistivity (ohm·m)'})
+            img3 = fig_soil.to_image(format="png", width=900, height=500)
+            doc.add_picture(io.BytesIO(img3), width=Inches(6))
+
+            # ================= TABLE 2: Top 10 Fault Locations =================
+            doc.add_heading('5. Top 10 Coating Fault Locations', level=1)
+            top_faults = gdf.nlargest(10, 'DCVG_mV')[['Chainage_m', 'DCVG_mV', 'Coating_Fault_Severity']]
+            table2 = doc.add_table(rows=1, cols=3)
+            table2.style = 'Light Grid Accent 2'
+            hdr = table2.rows[0].cells
+            hdr[0].text = "Chainage (m)"
+            hdr[1].text = "DCVG (mV)"
+            hdr[2].text = "Severity"
+            for _, row in top_faults.iterrows():
+                cells = table2.add_row().cells
+                cells[0].text = f"{row['Chainage_m']:.0f}"
+                cells[1].text = f"{row['DCVG_mV']:.1f}"
+                cells[2].text = f"{row['Coating_Fault_Severity']}"
+
+            # ================= Save & Download =================
+            buffer = io.BytesIO()
+            doc.save(buffer)
+            buffer.seek(0)
+            st.download_button(
+                label="📥 Click to Save Geophysical Word Report",
+                data=buffer,
+                file_name="Corzynth_Geophysical_Report.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
 
 # ------------------------------------------------------------
 # ALERTS
