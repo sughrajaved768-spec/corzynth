@@ -1378,8 +1378,8 @@ elif page == "Geophysical Analysis":
         st.plotly_chart(fig3d, use_container_width=True)
 
         # GIS Map
-        lat_col = next((c for c in geo.columns if c in ["Latitude", "latitude", "Lat"]), None)
-        lon_col = next((c for c in geo.columns if c in ["Longitude", "longitude", "Lon"]), None)
+        lat_col = next((c for c in geo.columns if c in ["Latitude", "latitude", "Lat", "GPS_Latitude", "gps_latitude"]), None)
+        lon_col = next((c for c in geo.columns if c in ["Longitude", "longitude", "Lon", "GPS_Longitude", "gps_longitude"]), None)
         if lat_col and lon_col:
             st.markdown('<div class="section-title">🗺️ Geographic Risk Map</div>',
                         unsafe_allow_html=True)
