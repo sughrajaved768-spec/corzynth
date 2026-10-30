@@ -1,0 +1,28 @@
+Sr,Zone,Facility,Location,Well_Type,Incumbent_Dose,Blend_Inhibitor_Parts,Blend_Diesel_Parts,Recommended_Dose,Gas_MMscfd,Remarks
+1,MKK,Naimat Baisal,Naimat West Mid Point C-2501B,HiCo2,0.8,3,7,0.8,26.0,Gas Outlet of Slug Catcher C-2501B
+2,MKK,Naimat Baisal,Naimat West Mid Point C-2501B,HiCo2,0.4,1,1,0.4,15.0,D/S of 1st Stage Compressor C-2501B
+3,MKK,Naimat Baisal,Naimat West Mid Point C-2501B,HiCo2,0.4,1,1,0.4,15.0,D/S of 2nd Stage Compressor C-2501B
+4,MKK,Naimat Baisal,Naimat West Mid Pointc1810 / 6801,HiCo2,0.7,3,7,0.7,14.0,Gas Outlet of Slug Catcher MID Point C-1810/6801
+5,MKK,Naimat Baisal,Naimat West Mid Point V-130001,HiCo2,0.7,3,7,0.7,8.915,Gas Outlet of Offloading Sep V-130001
+6,MKK,Naimat Baisal,Sutiari Deep Remote Compressor A-540,HiCo2,0.4,1,1,0.4,18.269,Gas Outlet of Slug Catcher A-540
+7,MKK,Naimat Baisal,Sutiari Deep Remote Compressor A-540,HiCo2,0.2,1,1,0.2,18.269,D/S of 1st Stage Compressor A-540
+8,MKK,Naimat Baisal,Sutiari Deep Remote Compressor A-540,HiCo2,0.4,1,1,0.4,18.269,D/S of 2nd Stage Compressor A-540
+9,MKK,Naimat Baisal,Sutiari Deep Remote Compressor A-560,HiCo2,0.4,1,1,0.4,20.43,Gas Outlet of Slug Catcher A-560
+10,MKK,Naimat Baisal,Sutiari Deep Remote Compressor A-560,HiCo2,0.2,1,1,0.2,20.43,D/S of 1st Stage Compressor A-560
+11,MKK,Naimat Baisal,Sutiari Deep Remote Compressor A-560,HiCo2,0.4,1,1,0.4,20.43,D/S of 2nd Stage Compressor A-560
+12,MKK,Naimat Baisal,Sutiari Deep Remote Compressor A-500,HiCo2,0.4,1,1,0.4,20.0,Gas Outlet of Slug Catcher A-560
+13,MKK,Naimat Baisal,Sutiari Deep Remote Compressor A-500,HiCo2,0.2,1,1,0.2,20.0,D/S of 1st Stage Compressor A-560
+14,MKK,Naimat Baisal,Sutiari Deep Remote Compressor A-500,HiCo2,0.4,1,1,0.4,20.0,D/S of 2nd Stage Compressor A-560
+15,MKK,Naimat Baisal,Sutiari Deep Remote C-2501C,HiCo2,0.4,1,1,0.4,22.0,Gas Outlet of Slug Catcher A-560
+16,MKK,Naimat Baisal,Sutiari Deep Remote C-2501C,HiCo2,0.2,1,1,0.2,22.0,D/S of 1st Stage Compressor A-560
+17,MKK,Naimat Baisal,Sutiari Deep Remote C-2501C,HiCo2,0.4,1,1,0.4,22.0,D/S of 2nd Stage Compressor A-560
+18,MKK,Naimat Baisal,Sutiari Deep Remote A-7400,HiCo2,0.4,1,1,0.4,22.0,Gas Outlet of Slug Catcher A-7400
+19,MKK,Naimat Baisal,Sutiari Deep Remote A-7400,HiCo2,0.2,1,1,0.2,22.0,D/S of 1st Stage Compressor A-7400
+20,MKK,Naimat Baisal,Sutiari Deep Remote A-7400,HiCo2,0.4,1,1,0.4,22.0,D/S of 2nd Stage Compressor A-7400
+21,MKK,Naimat Baisal,Sutiari Deep Remote A-1702,HiCo2,0.4,1,1,0.4,3.0,Gas Outlet of Slug Catcher A-1702
+22,MKK,Naimat Baisal,Sutiari Deep Remote C-1251,HiCo2,0.2,1,1,0.2,3.0,D/S of 1st Stage Compressor C-1251
+23,MKK,Naimat Baisal,Sutiari Deep Remote C-1251,HiCo2,0.4,1,1,0.4,3.0,D/S of 2nd Stage Compressor C-1251
+24,MKK,Naimat Baisal,Naimat Basal LPG C-1810,HiCo2,0.8,3,7,0.8,14.0,Compressor
+25,MKK,Naimat Baisal,Naimat Basal LPG C-6801,HiCo2,0.8,3,7,0.8,8.7,Compressor
+26,MKK,Naimat Baisal,Naimat Basal LPG C-2621,HiCo2,0.8,3,7,0.8,12.0,Compressor
+27,MKK,Naimat Baisal,Compressor 2501A,HiCo2,0.7,3,7,1.4,,Compressor

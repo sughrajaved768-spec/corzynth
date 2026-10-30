@@ -1,0 +1,58 @@
+Section,KPI,Metric,Overall,Type
+Vessels,Onstream inspection (L1&2),Compliance,90,percent
+Vessels,Off-line inspection / NII (L3&4),Compliance,97,percent
+Tanks,Online inspection,Compliance,94,percent
+Tanks,Online roof inspection,Compliance,90,percent
+Tanks,Offline inspection,Compliance,62,percent
+Tanks,Routine surveillance (Ops),Plan completed,69,percent
+Tanks,Routine surveillance (Ops),Conformance,73,percent
+Tanks,Tank bottom CP survey,Plan completed,100,percent
+Tanks,Tank bottom CP survey,Conformance,55,percent
+Tanks,Blanketing pressure on-spec,Conformance,95,percent
+Plant piping,Gas path inspection,Compliance,100,percent
+Plant piping,Amine plant inspection,Compliance,80,percent
+Plant piping,Amine plant inspection,Conformance,83,percent
+Plant piping,Glycol plant inspection,Compliance,100,percent
+Plant piping,Gas risers & remote inspection,Compliance,100,percent
+Monitoring CX/BH,Monitoring compliance,Plan completed,84,percent
+Monitoring CX/BH,Dissolved O2 on-spec,Conformance,62,percent
+Monitoring CX/BH,Dead leg flushing,Conformance,95,percent
+Monitoring CX/BH,Bacteria on-spec,Conformance,55,percent
+Monitoring CX/BH,Buried plant piping CP monitoring,Plan completed,100,percent
+Monitoring CX/BH,Buried plant piping CP monitoring,Conformance,34,percent
+Wells,WH piping UT,Compliance,100,percent
+Wells,WH risers UT,Compliance,100,percent
+Wells,JP residual testing,Conformance,43,percent
+Wells,Water quality testing,Conformance,21,percent
+Wells,Prod wells spot monitoring,Plan completed,76,percent
+Wells,Chemical deployment,Conformance,91,percent
+Wells,WI/WD monitoring,Plan completed,57,percent
+Pipelines,Pigging compliance,Plan completed,55,percent
+Pipelines,Pigging frequency review,Compliance,96,percent
+Pipelines,Pipeline residual monitoring,Plan completed,63,percent
+Pipelines,Pipeline residual monitoring,Conformance,80,percent
+Pipelines,WIW/WDW residual monitoring,Plan completed,96,percent
+Pipelines,WIW/WDW residual monitoring,Conformance,87,percent
+Pipelines,Pipeline bacteria monitoring,Plan completed,81,percent
+Pipelines,Pipeline bacteria monitoring,Conformance,96,percent
+Pipelines,Pipeline CP monitoring survey,Plan completed,100,percent
+Pipelines,Pipeline CP monitoring survey,Conformance,42,percent
+Pipelines,CP yearly audit,Conformance,51,percent
+Pipelines,Spot monitoring (ChampX/Baker),Plan completed,86,percent
+Pipelines,Chemical deployment,Conformance,97,percent
+Others,Corrosion coupons analysis,Conformance,86,percent
+Vessels,FFS cases closed (current year),Count,3,count
+Plant piping,FFS cases closed (current year),Count,3,count
+Wells,FFS cases closed (current year),Count,15,count
+Plant piping,Piping failures (monthly),Count,16,count
+Wells,Completion failures (corrosion),Count,0,count
+Pipelines,Pipeline leakage,Count,0,count
+Others,LOPC 2026,Count,22,count
+Pipelines,Pigging backlog >30 days,Count,22,count
+Others,Corrosion coupons overdue,Count,253,count
+Wells,No injection / empty day tank (monthly cases),Count,11,count
+Wells,Chem. inj. pump mechanical failure (cases),Count,30,count
+Wells,No access (cases),Count,90,count
+Pipelines,Chem. inj. pump mechanical failure (cases),Count,21,count
+Pipelines,No access (cases),Count,14,count
+Pipelines,No injection / empty day tank (cases),Count,21,count
