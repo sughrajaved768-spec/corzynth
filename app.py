@@ -360,7 +360,6 @@ page = st.sidebar.radio("Navigate", [
 # ══════════════════════════════════════════════════════════════════════════
 #  PREDICTION
 # ══════════════════════════════════════════════════════════════════════════
-
 if page == "🔮 Prediction":
     render_header()
     st.info("🔬 **Transparent Engineering** — every calculation step is shown "
@@ -376,21 +375,25 @@ if page == "🔮 Prediction":
         material = st.selectbox("Pipeline Material Grade", MATERIAL_GRADES)
         coating_condition = st.selectbox("Coating Condition", COATING_CONDITIONS)
         cp_on = st.selectbox("Cathodic Protection", ["Yes", "No"])
+        velocity = st.number_input("Flow Velocity (m/s)", 0.0, 15.0, 2.0, 0.5)
+        water_cut = st.number_input("Water Cut (%)", 0, 100, 50, 5)
     with c2:
         st.subheader("🧪 Chemistry & Inhibitor")
         co2 = st.number_input("CO₂ (%)", 0.0, 100.0, 2.0, 0.5)
         h2s = st.number_input("H₂S (ppm)", 0, 20000, 100, 50)
         ph = st.number_input("pH", 3.0, 10.0, 6.5, 0.1)
+        chlorides = st.number_input("Chlorides (mg/L)", 0, 200000, 10000, 1000)
         itype = st.selectbox("Inhibitor Type", INHIBITOR_TYPES)
         dose = st.number_input("Inhibitor Dose (ppm)", 0, 500, 25, 5)
         residual = st.number_input("Inhibitor Residual (ppm)", 0, 200, 10, 5)
 
     if st.button("🔮 Calculate Corrosion Rate & Life", type="primary",
-                 use_container_width=True):
+                use_container_width=True):
         v = dict(fluid=fluid, pressure=pressure, temp=temp, wt=wt,
-                 material=material, coating_condition=coating_condition,
-                 cp_on=cp_on, co2=co2, h2s=h2s, ph=ph, dose=dose,
-                 itype=itype, residual=residual)
+                material=material, coating_condition=coating_condition,
+                cp_on=cp_on, co2=co2, h2s=h2s, ph=ph, dose=dose,
+                itype=itype, residual=residual,
+                velocity=velocity, water_cut=water_cut, chlorides=chlorides)
         rate, life, life_raw, risk, emoji, steps = full_calculation(v)
 
         # ── RESULTS ──
@@ -398,7 +401,7 @@ if page == "🔮 Prediction":
         m1, m2, m3 = st.columns(3)
         m1.metric("Corrosion Rate", f"{rate:.3f} mm/yr")
         life_text = (f"≥ {DESIGN_LIFE} yrs" if life_raw > DESIGN_LIFE
-                     else f"{life:.1f} yrs")
+                    else f"{life:.1f} yrs")
         m2.metric("Remaining Life", life_text,
                   "🟢 Beyond design life" if life_raw > DESIGN_LIFE else
                   ("🟢 Good" if life > 25 else ("🟡 Plan" if life > 10 else "🔴 Urgent")))
@@ -407,16 +410,20 @@ if page == "🔮 Prediction":
         # ── NACE ──
         if h2s > 500:
             st.warning("🔴 **NACE MR0175: Sour Service** — H₂S > 500 ppm, "
-                       "use compliant materials")
+                      "use compliant materials")
         elif rate > 0.5:
             st.warning("🔴 **High Corrosion** — increase inhibitor or verify CP")
         else:
             st.success("✅ NACE MR0175: No compliance flags")
 
+        if chlorides > 50000:
+            st.warning("⚠️ **High Chlorides** — increased pitting risk. "
+                      "Consider alloy upgrade (13Cr / Duplex) or tighter monitoring.")
+
         # ── DOSE OPTIMIZATION ──
         st.subheader("💊 Best Inhibitor Dose Optimization")
         target = st.number_input("Your Target Rate (mm/yr)", 0.01, 1.0, 0.1, 0.01,
-                                 key="pred_target")
+                                key="pred_target")
         opt_dose, opt_rate = find_optimal_dose(v, target)
         st.markdown(f"""
         <div style="background:linear-gradient(135deg,#1a5276,#2e86c1);padding:20px;
@@ -446,7 +453,7 @@ if page == "🔮 Prediction":
         # ── TRANSPARENT CALCULATION ──
         st.subheader("🔬 Calculation Breakdown — Verify Every Step")
         st.caption("de Waard-Milliams (1991): "
-                   "log₁₀V = 5.8 − 1710/T + 0.67·log₁₀(fCO₂)")
+                  "log₁₀V = 5.8 − 1710/T + 0.67·log₁₀(fCO₂)")
         for step_name, step_calc in steps.items():
             st.markdown(f'<div class="calc-step"><b>{step_name}:</b> {step_calc}</div>',
                         unsafe_allow_html=True)
@@ -459,16 +466,16 @@ if page == "🔮 Prediction":
         st.subheader("📊 Sensitivity Analysis — What Affects Your Rate Most")
         st.dataframe(sensitivity_analysis(v, rate), use_container_width=True)
         st.caption("Higher Impact % = that input changes your corrosion rate "
-                   "the most. Focus control efforts there.")
+                  "the most. Focus control efforts there.")
 
         # ── LIFE PROJECTION ──
         st.subheader("📈 Life Projection")
         chart_df, proj_df = make_life_projection(wt, rate, life_raw)
         st.line_chart(chart_df)
         st.caption(f"🔴 Metal loss grows at {rate:.3f} mm/yr | "
-                   f"🟢 Wall thickness = {wt} mm | "
-                   f"🔵 Design life = {DESIGN_LIFE} yrs | "
-                   f"Corrosion end of life = {life_raw:.1f} yrs")
+                  f"🟢 Wall thickness = {wt} mm | "
+                  f"🔵 Design life = {DESIGN_LIFE} yrs | "
+                  f"Corrosion end of life = {life_raw:.1f} yrs")
         st.subheader("📋 Year-by-Year Wall Loss Projection")
         st.dataframe(proj_df, use_container_width=True)
         k1, k2, k3 = st.columns(3)
@@ -477,14 +484,14 @@ if page == "🔮 Prediction":
         k3.metric("Full Penetration",
                   f"{life_raw:.1f} yrs" if life_raw <= DESIGN_LIFE
                   else f"> {DESIGN_LIFE} yrs (beyond design life)")
-                # ── DOWNLOAD WORD REPORT ──
+
+        # ── DOWNLOAD WORD REPORT ──
         word_file = make_word_report(proj_df, wt, rate, life_raw)
         st.download_button(
             label="📄 Download Word Report",
             data=word_file,
             file_name="Corzynth_Life_Projection_Report.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
 # ══════════════════════════════════════════════════════════════════════════
 #  CHEMICAL ADVISOR
 # ══════════════════════════════════════════════════════════════════════════
