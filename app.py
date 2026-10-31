@@ -38,9 +38,21 @@ MATERIAL_FACTOR = {"API 5L X42": 1.05, "API 5L X52": 1.00, "API 5L X60": 0.97,
 #  LOGIN
 # ══════════════════════════════════════════════════════════════════════════
 
-def check_login(u, p):
-    return u == "admin" and p == "corzynth2026"
+import streamlit_authenticator as stauth
 
+def check_login(u, p):
+    try:
+        creds = st.secrets["credentials"]["usernames"]
+        if u in creds:
+            stored_hash = creds[u]["password"]
+            try:
+                return stauth.Hasher.check_pw(p, stored_hash)
+            except AttributeError:
+                import bcrypt
+                return bcrypt.checkpw(p.encode(), stored_hash.encode())
+    except Exception:
+        pass
+    return False
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
