@@ -170,11 +170,39 @@ def full_calculation(v):
     final_rate = max(0.01, rate_fluid * mf)
     steps["13. Material Grade"] = (
         f"{v.get('material','API 5L X52')} → ×{mf} = {final_rate:.3f} mm/yr")
+            # 14. Water cut — oil wetting protects steel
+    water_cut = v.get("water_cut", 50)
+    wc_factor = 0.3 if water_cut < 20 else (0.7 if water_cut < 40 else 1.00)
+    final_rate = max(0.01, final_rate * wc_factor)
+    steps["14. Water Cut Correction"] = (
+        f"{water_cut}% water → ×{wc_factor:.2f} = {final_rate:.3f} mm/yr")
 
-    # Remaining life — capped at design life
+    # 15. Velocity — high flow removes protective scale
+    velocity = v.get("velocity", 2.0)
+    vel_factor = 0.9 if velocity < 1.0 else (1.00 if velocity <= 3.0 else
+                 (1.15 if velocity <= 6.0 else 1.30))
+    final_rate = max(0.01, final_rate * vel_factor)
+    steps["15. Velocity Correction"] = (
+        f"{velocity} m/s → ×{vel_factor:.2f} = {final_rate:.3f} mm/yr")
+
+    # 16. Chlorides — higher chlorides = more aggressive
+    chlorides = v.get("chlorides", 10000)
+    cl_factor = 1.00 if chlorides <= 10000 else (1.10 if chlorides <= 50000 else
+                 (1.20 if chlorides <= 100000 else 1.30))
+    final_rate = max(0.01, final_rate * cl_factor)
+    steps["16. Chloride Correction"] = (
+        f"{chlorides:,} mg/L → ×{cl_factor:.2f} = {final_rate:.3f} mm/yr")
+
+    # 17. FeCO3 scale credit at high temperature
+    if v["temp"] > 150 and v["ph"] >= 6.0:
+        final_rate = max(0.01, final_rate * 0.6)
+        steps["17. FeCO3 Scale Credit"] = (
+            f"Temp {v['temp']}°F + pH {v['ph']} → ×0.60 = {final_rate:.3f} mm/yr")
+    
+        # Remaining life — capped at design life
     life_raw = v["wt"] / final_rate
     life = min(life_raw, DESIGN_LIFE)
-    steps["14. Remaining Life"] = (
+    steps["18. Remaining Life"] = (
         f"{v['wt']}mm ÷ {final_rate:.3f} = {life_raw:.1f} yrs "
         f"→ capped at {DESIGN_LIFE} yrs design life")
 
@@ -186,7 +214,6 @@ def full_calculation(v):
         risk, emoji = "HIGH", "🔴"
 
     return final_rate, life, life_raw, risk, emoji, steps
-
 
 def ai_explanation(v, rate, life_raw, risk):
     coat_pct = {"Excellent": "70%", "Good": "50%", "Fair": "20%", "Poor": "0%"}
