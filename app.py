@@ -291,7 +291,29 @@ def make_life_projection(wt, rate, life_raw):
     proj_df = pd.DataFrame(proj_rows)
     chart_df = proj_df.set_index("Year")[["Metal Loss (mm)", "Remaining Wall (mm)"]]
     return chart_df, proj_df
+def make_word_report(proj_df, wt, rate, life_raw):
+    from docx import Document
+    from io import BytesIO
 
+    doc = Document()
+    doc.add_heading("Corzynth — Life Projection Report", 0)
+    doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    doc.add_paragraph(f"Wall Thickness: {wt} mm | Corrosion Rate: {rate} mm/yr | Estimated Life: {life_raw:.1f} years")
+
+    doc.add_heading("Year-by-Year Projection", level=1)
+    table = doc.add_table(rows=1, cols=len(proj_df.columns))
+    table.style = "Light Grid Accent 1"
+    for i, col in enumerate(proj_df.columns):
+        table.rows[0].cells[i].text = str(col)
+    for _, row in proj_df.iterrows():
+        cells = table.add_row().cells
+        for i, val in enumerate(row):
+            cells[i].text = str(val)
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
 # ══════════════════════════════════════════════════════════════════════════
 #  UI
 # ══════════════════════════════════════════════════════════════════════════
@@ -455,6 +477,13 @@ if page == "🔮 Prediction":
         k3.metric("Full Penetration",
                   f"{life_raw:.1f} yrs" if life_raw <= DESIGN_LIFE
                   else f"> {DESIGN_LIFE} yrs (beyond design life)")
+                # ── DOWNLOAD WORD REPORT ──
+        word_file = make_word_report(proj_df, wt, rate, life_raw)
+        st.download_button(
+            label="📄 Download Word Report",
+            data=word_file,
+            file_name="Corzynth_Life_Projection_Report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 # ══════════════════════════════════════════════════════════════════════════
 #  CHEMICAL ADVISOR
