@@ -39,8 +39,19 @@ MATERIAL_GRADES = ["API 5L X42", "API 5L X52", "API 5L X60", "API 5L X65",
                    "API 5L X70", "Carbon Steel A106", "Stainless 316L", "Duplex 2205"]
 MATERIAL_FACTOR = {"API 5L X42": 1.05, "API 5L X52": 1.00, "API 5L X60": 0.97,
                    "API 5L X65": 0.95, "API 5L X70": 0.93,
-                   "Carbon Steel A106": 1.00, "Stainless 316L": 0.30,
-                   "Duplex 2205": 0.20}
+                   "Carbon Steel A106": 1.00, "Stainless 316L": 0.40, "Duplex 2205": 0.35}
+
+# ── Overdose Penalty (ADD THIS RIGHT HERE) ──
+def overdose_penalty(residual_ppm):
+    """Penalty for excessive residual inhibitor — deposits, emulsions, reduced effectiveness."""
+    if residual_ppm <= 40:
+        return 1.0
+    elif residual_ppm <= 100:
+        return 1.05
+    elif residual_ppm <= 300:
+        return 1.15
+    else:
+        return 1.25
 
 # ══════════════════════════════════════════════════════════════════════════
 #  LOGIN
@@ -146,6 +157,18 @@ def full_calculation(v):
         f"Dose {v['dose']:.0f} ppm | Residual {residual_ppm:.0f} ppm "
         f"({v.get('residual_qt', 0):.1f} qt) → protection driven by residual: "
         f"{effective_ppm:.0f} ppm → {inh_eff*100:.0f}% reduction → {rate_inh:.3f} mm/yr")
+
+    # ── Overdose Penalty (NEW) ──
+    od_pen = overdose_penalty(residual_ppm)
+    rate_inh = rate_inh * od_pen
+    steps["9b. Overdose Penalty"] = (
+        f"Residual {residual_ppm:.0f} ppm → ×{od_pen:.2f} = {rate_inh:.3f} mm/yr")
+
+    cm = COATING_FACTOR[v["coating_condition"]]
+    rate_coat = rate_inh * cm
+    steps["10. Coating Protection"] = f"{v['coating_condition']} → ×{cm} = {rate_coat:.3f} mm/yr"
+    cpm = 0.5 if v["cp_on"] == "Yes" else 1.0
+    rate_cp = rate_coat * cpm
 
     cm = COATING_FACTOR[v["coating_condition"]]
     rate_coat = rate_inh * cm
