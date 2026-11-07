@@ -2,22 +2,22 @@
   "selected": "Hist Gradient Boosting",
   "cv": {
     "Random Forest": {
-      "mean": 0.8189981158560512,
-      "std": 0.005512154984489389
+      "mean": 0.685879827436781,
+      "std": 0.03434333207300329
     },
     "Extra Trees": {
-      "mean": 0.8337179256270592,
-      "std": 0.009368618277925329
+      "mean": 0.7308483683503291,
+      "std": 0.02663245051005538
     },
     "Hist Gradient Boosting": {
-      "mean": 0.9445449783168642,
-      "std": 0.00844426524979128
+      "mean": 0.9134978378324121,
+      "std": 0.024539338890180604
     }
   },
-  "test_r2": 0.9527745004088831,
-  "test_mae_mm_yr": 0.002096619675039824,
-  "rows": 5000,
-  "grouped_split": true,
+  "test_r2": 0.8088953016613432,
+  "test_mae_mm_yr": 0.1606946170947047,
+  "rows": 20000,
+  "grouped_split": false,
   "calibration": null,
   "sklearn": "1.9.1",
   "python": "3.13.17"
