@@ -15,6 +15,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import joblib
 import os, io, base64
 from datetime import datetime
 
@@ -52,6 +53,131 @@ def overdose_penalty(residual_ppm):
         return 1.15
     else:
         return 1.25
+def interpret_inputs(v):
+    """Simple, friendly explanation of the user's inputs."""
+    notes = []
+    co2 = v.get("co2", 0)
+    temp = v.get("temp", 0)
+    ph = v.get("ph", 7)
+    h2s = v.get("h2s", 0)
+    chlorides = v.get("chlorides", 0)
+    residual = v.get("residual_ppm", 0)
+    velocity = v.get("velocity", 0)
+    wt = v.get("wt", 0)
+
+    notes.append(("🛢️", f"You are transporting **{v.get('fluid', 'fluid')}** through a **{v.get('material', 'carbon steel')}** pipe."))
+
+    if co2 >= 10:
+        notes.append(("⚠️", f"CO₂ is high ({co2:.0f}%) — this makes corrosion stronger. Your inhibitor is important."))
+    else:
+        notes.append(("✅", f"CO₂ is low ({co2:.1f}%) — corrosion risk is manageable."))
+
+    if temp >= 200:
+        notes.append(("⚠️", f"Temperature is high ({temp:.0f}°F) — corrosion speeds up at high temperature."))
+    else:
+        notes.append(("✅", f"Temperature is {temp:.0f}°F — normal operating range."))
+
+    if ph < 6.0:
+        notes.append(("⚠️", f"Water is acidic (pH {ph:.1f}) — this increases corrosion."))
+    else:
+        notes.append(("✅", f"Water pH is {ph:.1f} — protective scale can form."))
+
+    if h2s > 500:
+        notes.append(("🔴", f"H₂S is very high ({h2s:.0f} ppm) — special material rules apply (NACE MR0175)."))
+    elif h2s > 50:
+        notes.append(("⚠️", f"H₂S is moderate ({h2s:.0f} ppm) — monitor for cracking."))
+    else:
+        notes.append(("✅", f"H₂S is low ({h2s:.0f} ppm) — good."))
+
+    if chlorides > 10000:
+        notes.append(("⚠️", f"Salt level is high ({chlorides:,.0f} mg/L) — can cause pitting (small holes in the pipe)."))
+    else:
+        notes.append(("✅", f"Salt level is {chlorides:,.0f} mg/L — acceptable."))
+
+    if residual < 20:
+        notes.append(("🔴", f"Inhibitor residual is only {residual:.0f} ppm — **too low**. Increase the dose to protect the pipe."))
+    elif residual <= 40:
+        notes.append(("✅", f"Inhibitor residual is {residual:.0f} ppm — **good level** for protection."))
+    elif residual <= 100:
+        notes.append(("⚠️", f"Inhibitor residual is {residual:.0f} ppm — more than needed. You could reduce the dose and save money."))
+    else:
+        notes.append(("🔴", f"Inhibitor residual is {residual:.0f} ppm — **too high**. This can cause deposits and emulsions. Reduce the dose."))
+
+    if velocity > 5:
+        notes.append(("⚠️", f"Flow speed is high ({velocity:.1f} m/s) — can wear away the pipe surface over time."))
+    else:
+        notes.append(("✅", f"Flow speed is {velocity:.1f} m/s — safe range."))
+
+    return notes
+def evaluate_inputs(v, final_rate, remaining_life, target_life=10.0):
+    """Simple verdict: is my dose right? Is my pipe wall thick enough?"""
+    target_rate = v["wt"] / target_life if target_life > 0 else 0.2
+    residual = v.get("residual_ppm", 0)
+    wt = v["wt"]
+    required_wall = final_rate * target_life
+    tol = 0.05  # small tolerance for rounding
+
+    # --- Inhibitor verdict ---
+    if residual < 20:
+        inh = ("🔴", f"**Your inhibitor dose is too low.** You have {residual:.0f} ppm residual, but you need at least 20 ppm. Increase the daily dose.")
+    elif final_rate <= target_rate + tol:
+        if residual <= 40:
+            inh = ("🟢", f"**Your inhibitor dose is just right.** {residual:.0f} ppm residual gives you {remaining_life:.0f} years of life — matches your {target_life:.0f}-year target.")
+        elif residual <= 100:
+            inh = ("🟡", f"**Your inhibitor dose is more than needed.** {residual:.0f} ppm residual gives {remaining_life:.0f} years — you could reduce the dose and still meet your {target_life:.0f}-year target.")
+        else:
+            inh = ("🔴", f"**Your inhibitor dose is too high.** {residual:.0f} ppm residual is more than needed and may cause deposits. Reduce the daily dose.")
+    else:
+        inh = ("🟡", f"**Your inhibitor dose is not quite enough for your {target_life:.0f}-year target.** {residual:.0f} ppm residual gives {remaining_life:.0f} years — increase the dose slightly or accept a shorter life.")
+
+    # --- Wall verdict ---
+    if wt >= required_wall - tol:
+        wall = ("🟢", f"**Your pipe wall is thick enough.** {wt:.1f} mm wall will last {remaining_life:.0f} years at this corrosion rate.")
+    else:
+        wall = ("🔴", f"**Your pipe wall is too thin.** You need {required_wall:.1f} mm for a {target_life:.0f}-year life, but you only have {wt:.1f} mm.")
+
+    # --- Overall verdict ---
+    if "just right" in inh[1] and "thick enough" in wall[1]:
+        overall = ("✅", "**Great news — your inhibitor dose and pipe wall are both correct for your target life.**")
+    elif "too low" in inh[1]:
+        overall = ("⚠️", "**Action needed: increase your inhibitor dose to protect the pipe.**")
+    elif "too high" in inh[1]:
+        overall = ("⚠️", "**Action needed: reduce your inhibitor dose to save money and avoid deposits.**")
+    elif "not quite enough" in inh[1]:
+        overall = ("⚠️", "**Action needed: increase your inhibitor dose slightly to reach your target life.**")
+    elif "too thin" in wall[1]:
+        overall = ("⚠️", "**Action needed: your pipe wall is too thin for the target life — consider a thicker pipe or better protection.**")
+    else:
+        overall = ("🟡", "**Small adjustments recommended — review your dose and wall thickness.**")
+
+    return inh, wall, overall
+def smart_recommendation(v, rate, life, target_life=10.0, price_per_gallon=3.0):
+    """Combines evaluation + optimizer into one clear action plan."""
+    inh, wall, overall = evaluate_inputs(v, rate, life, target_life)
+    target_rate = v["wt"] / target_life if target_life > 0 else 0.2
+    optimal_dose, opt_rate = find_optimal_dose(v, target_rate)
+    current_residual = v.get("residual_ppm", 0)
+    water_bbl = v.get("dose_water_bbl", 100)
+
+    # Daily quarts needed for optimal dose (same conversion as optimizer)
+    optimal_qt = optimal_dose * water_bbl * 0.00035 if water_bbl > 0 else 0
+    current_qt = v.get("residual_qt", 0)
+
+    # Cost savings using user-entered price
+    price_per_qt = price_per_gallon / 4
+    daily_savings = max(0, (current_qt - optimal_qt)) * price_per_qt
+    yearly_savings = daily_savings * 365
+
+    lines = []
+    lines.append(("🎯", f"**Recommended dose: {optimal_dose} ppm** ({optimal_qt:.2f} quarts/day at {water_bbl} bbl/d water)"))
+    lines.append(("📅", f"**Expected remaining life: {life:.0f} years** at this dose (target: {target_life:.0f} years)"))
+    if current_residual > optimal_dose:
+        lines.append(("💰", f"**Potential savings: ${yearly_savings:,.0f}/year** by reducing from {current_residual:.0f} ppm to {optimal_dose} ppm"))
+    if "too thin" in wall[1]:
+        lines.append(("🔧", f"**Wall upgrade needed:** increase from {v['wt']:.1f} mm to {rate * target_life:.1f} mm for {target_life:.0f}-year life"))
+    lines.append(overall)
+
+    return lines
 
 # ══════════════════════════════════════════════════════════════════════════
 #  LOGIN
@@ -288,23 +414,20 @@ def sensitivity_analysis(v, rate):
 def find_optimal_dose(v, target_rate, dosing_eff=0.9611):
     """Field-calibrated optimizer: finds LOWEST dose achieving target life.
     Protection is RESIDUAL-DRIVEN (field reality): the residual inhibitor in
-    the system protects the pipe; the daily dose maintains that residual.
-    Dosing efficiency (96.11% field average, 2025 Dep Eff% data) applied."""
-    doses = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150]
+    the system protects the pipe; the daily dose maintains that residual."""
+    doses = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 300, 400, 500]
     water_bbl = v.get("dose_water_bbl", 100)
     for d in doses:
         residual_ppm = d
-        residual_qt = (d * 0.946 * 1e6 / (water_bbl * 159)
+        residual_qt = (d * water_bbl * 159 / 0.946e6
                        if water_bbl > 0 else 0.0)
         vd = {**v, "dose": d, "residual_ppm": residual_ppm,
               "residual_qt": residual_qt}
         r, _, _, _, _, _ = full_calculation(vd)
-        r_adjusted = r / dosing_eff
-        if r_adjusted <= target_rate:
-            return d, r_adjusted
-    return 150, full_calculation({**v, "dose": 150, "residual_ppm": 150,
-                                  "residual_qt": 150 * 0.946 * 1e6 / (water_bbl * 159) if water_bbl > 0 else 0})[0] / dosing_eff
-
+        if r <= target_rate * 1.005:
+            return d, r
+    return 500, full_calculation({**v, "dose": 500, "residual_ppm": 500,
+                                  "residual_qt": 500 * water_bbl * 159 / 0.946e6 if water_bbl > 0 else 0})[0]
 
 def make_redose_table(optimal_dose, decay, min_res, water_bbl_d, corrosion_rate):
     water_L_day = water_bbl_d * 159
@@ -503,14 +626,15 @@ def make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
     doc.add_heading("3. Best Inhibitor Dose", level=1)
     doc.add_paragraph(f"Optimized Dose: {opt_dose} ppm = {opt_qt_day:.2f} quarts/day")
     doc.add_heading("4. Re-dosing Schedule", level=1)
-    t = doc.add_table(rows=1, cols=len(redose_df.columns))
-    t.style = "Light Grid Accent 1"
-    for i, col in enumerate(redose_df.columns):
-        t.rows[0].cells[i].text = str(col)
-    for _, row in redose_df.iterrows():
-        cells = t.add_row().cells
-        for i, val in enumerate(row):
-            cells[i].text = str(val)
+    if redose_df is not None:
+        t = doc.add_table(rows=1, cols=len(redose_df.columns))
+        t.style = "Light Grid Accent 1"
+        for i, col in enumerate(redose_df.columns):
+            t.rows[0].cells[i].text = str(col)
+        for _, row in redose_df.iterrows():
+            cells = t.add_row().cells
+            for i, val in enumerate(row):
+                cells[i].text = str(val)
     doc.add_heading("5. Calculation Breakdown", level=1)
     for step_name, step_calc in steps.items():
         p = doc.add_paragraph()
@@ -722,7 +846,6 @@ elif page == "🔮 Prediction":
             st.metric("💧 Water Cut (auto-calculated)", f"{auto_water_cut:.1f}%",
                       f"from {water_bbl:.0f} bbl/d water + {oil_bbl:.0f} bbl/d oil")
 
-            # Auto-calculate velocity & water cut on every input change (no button)
             auto_velocity, slip_info = calculate_velocity(
                 d["fluid"], gas_mmscfd, pipe_dia, line_p, fc_temp,
                 oil_bbl, water_bbl, gas_sg)
@@ -793,7 +916,9 @@ elif page == "🔮 Prediction":
                          itype=itype, residual_ppm=residual_ppm,
                          residual_qt=residual_qt, daily_qt=daily_qt,
                          velocity=velocity, water_cut=auto_water_cut, chlorides=chlorides,
-                         dose_water_bbl=water_for_dose, service_years=service_years)
+                         dose_water_bbl=water_for_dose, service_years=service_years,
+                         diameter=pipe_dia, oil_rate=oil_bbl, water_rate=water_bbl,
+                         gas_rate=gas_mmscfd, gas_sg=gas_sg)
                 rate, life, life_raw, risk, emoji, steps = full_calculation(v)
                 st.session_state[f"{key_prefix}_result"] = (v, rate, life, life_raw, risk, emoji, steps)
 
@@ -808,7 +933,7 @@ elif page == "🔮 Prediction":
                 m3.metric("Service Years", f"{v.get('service_years', 0):.0f} yr")
                 m4.metric("Risk", f"{emoji} {risk}")
 
-                if h2s > 500:
+                if v.get("h2s", 0) > 500:
                     st.warning("🔴 **NACE MR0175: Sour Service** — H₂S > 500 ppm")
                 elif rate > 0.5:
                     st.warning("🔴 **High Corrosion** — increase inhibitor or verify CP")
@@ -816,10 +941,53 @@ elif page == "🔮 Prediction":
                     st.success("✅ NACE MR0175: No compliance flags")
                 if chlorides > 50000:
                     st.warning("⚠️ **High Chlorides** — pitting risk. Consider alloy upgrade.")
+                if st.button("🤖 Try ML Prediction", key=f"{key_prefix}_ml"):
+                    model = joblib.load("corrosion_model.pkl")
+                    cols = joblib.load("feature_cols.pkl")
+                    ml_input = {
+                        "Fluid_Type": v["fluid"],
+                        "Material_Grade": v["material"],
+                        "Coating_Condition": v["coating_condition"],
+                        "CP_Status": v["cp_on"],
+                        "Pipe_Diameter_in": v.get("diameter", 6.0),
+                        "Wall_Thickness_mm": v["wt"],
+                        "Service_Years": v["service_years"],
+                        "Operating_Pressure_psi": v["pressure"],
+                        "Operating_Temperature_F": v["temp"],
+                        "CO2_percent": v["co2"],
+                        "H2S_ppm": v["h2s"],
+                        "pH": v["ph"],
+                        "Chlorides_mg_L": v["chlorides"],
+                        "Oil_Rate_bbl_d": v.get("oil_rate", 1000),
+                        "Water_Rate_bbl_d": v.get("water_rate", 500),
+                        "Gas_Rate_MMscfd": v.get("gas_rate", 5.0),
+                        "Gas_SG": v.get("gas_sg", 0.7),
+                        "Velocity_m_s": v["velocity"],
+                        "Water_Cut_percent": v["water_cut"],
+                        "Inhibitor_Type": v["itype"],
+                        "Inhibitor_Dose_ppm": v["dose"],
+                        "Inhibitor_Dose_qt_day": v["daily_qt"],
+                        "Residual_Inhibitor_ppm": v["residual_ppm"],
+                        "Target_Remaining_Life_yr": 10.0,
+                        "Fe_Count_mg_L": 50.0,
+                    }
+                    df_in = pd.DataFrame([ml_input])
+                    for c in cols:
+                        if c not in df_in.columns:
+                            df_in[c] = 0
+                    df_in = df_in[cols]
+                    ml_rate = float(model.predict(df_in)[0])
+                    ml_life = v["wt"] / ml_rate if ml_rate > 0 else 999
+                    st.success(f"🤖 **ML Prediction:** {ml_rate:.3f} mm/yr | Remaining Life: {ml_life:.1f} yrs")
 
                 st.subheader("💊 Dose Optimizer — Daily & Continuous")
                 target_life = st.number_input("Target Remaining Life (years)", 1.0, 30.0, 10.0, 0.5,
                                               key=f"{key_prefix}_tlife")
+                price_per_gallon = st.number_input(
+                    "Inhibitor Price ($/gallon)",
+                    min_value=0.5, max_value=200.0, value=3.0, step=0.5,
+                    key=f"{key_prefix}_price"
+                )
                 target_rate = v["wt"] / target_life if target_life > 0 else 0.2
                 st.caption(f"Target corrosion rate for {target_life:.0f} yr life: {target_rate:.3f} mm/yr")
                 opt_dose, opt_rate = find_optimal_dose(v, target_rate)
@@ -839,16 +1007,24 @@ elif page == "🔮 Prediction":
                         f"**Continuous form:** {opt_ml_min:.2f} mL/min | "
                         f"Predicted rate: {opt_rate:.3f} mm/yr | "
                         f"Estimated life: {est_life:.1f} yr")
-                if opt_rate > target_rate:
+                if opt_rate > target_rate * 1.005:
                     st.warning("💡 Inhibitor alone cannot reach target — consider coating/CP/alloy upgrade.")
+                st.subheader("🧭 What Do My Inputs Mean?")
+                for icon, note in interpret_inputs(v):
+                    st.markdown(f"{icon} {note}")
 
-                st.subheader("🔄 Re-Dosing Schedule — Daily Basis (Continuous Backup)")
-                decay = st.number_input("Residual Decay (ppm/day)", 1, 50, 10, key=f"{key_prefix}_decay")
-                min_res = st.number_input("Min Effective Residual (ppm)", 1, 100, 10, key=f"{key_prefix}_minres")
-                redose_df, redose_day, base_qt = make_redose_table(opt_dose, decay, min_res, water_bbl_opt, rate)
-                st.dataframe(redose_df, use_container_width=True)
-                st.success(f"✅ **Continuous:** {base_qt * 946 / 1440:.2f} mL/min | "
-                           f"**Daily batch backup:** {base_qt:.2f} quarts/day")
+                st.subheader("📋 Is My Setup Correct?")
+                inh, wall, overall = evaluate_inputs(v, rate, life, target_life)
+                st.info(f"{inh[0]} {inh[1]}")
+                st.info(f"{wall[0]} {wall[1]}")
+                if overall[0] == "✅":
+                    st.success(f"{overall[0]} {overall[1]}")
+                else:
+                  st.warning(f"{overall[0]} {overall[1]}")
+                st.markdown("### 🎯 Smart Recommendation")
+                rec = smart_recommendation(v, rate, life, target_life, price_per_gallon)
+                for icon, text in rec:
+                    st.markdown(f"{icon} {text}")
 
                 st.subheader("🔬 Calculation Breakdown — Verify Every Step")
                 for step_name, step_calc in steps.items():
@@ -868,7 +1044,7 @@ elif page == "🔮 Prediction":
                 st.dataframe(proj_df, use_container_width=True)
 
                 word_file = make_word_report(proj_df, wt, rate, life_raw, v, steps,
-                                             redose_df, sens_df, opt_dose, opt_qt_day, risk)
+                        None, sens_df, opt_dose, opt_qt_day, risk)
                 st.download_button("📄 Download Complete Word Report",
                                    data=word_file, file_name=f"Corzynth_{key_prefix}_Report.docx",
                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -884,7 +1060,6 @@ elif page == "🔮 Prediction":
     render_line_tab(tab_water, "💧 Water Line", LINE_DEFAULTS["water"], "water")
     render_line_tab(tab_gas, "⛽ Natural Gas Line", LINE_DEFAULTS["gas"], "gas")
     render_line_tab(tab_multi, "🫧 Multiphase Line", LINE_DEFAULTS["multi"], "multi")
-
 
 elif page == "🧪 Chemical Advisor":
     render_header()
