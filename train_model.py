@@ -128,7 +128,7 @@ if kpi is not None:
     pc = kpi[kpi.Type == "percent"]
     real["kpi"] = dict(percent_kpis=len(pc), below_80=int((pc.Overall < 80).sum()),
                        worst=pc.nsmallest(5, "Overall")[["KPI", "Metric", "Overall"]].to_dict("records"))
-real["dataset_context"] = dict(mean_residual_to_dose_ratio=float((X.Inhibitor_Residual_ppm / (X.Inhibitor_Dose_ppm + 1)).mean()))
+real["dataset_context"] = dict(mean_residual_to_dose_ratio=float((X.Residual_Inhibitor_ppm / (X.Inhibitor_Dose_ppm + 1)).mean()))
 for name, d in [("geophysical", geo), ("chemical", chem), ("integrity", integ)]:
     if d is not None:
         d.to_csv(f"Corzynth_{name.capitalize()}_Data_Active.csv", index=False)
@@ -136,8 +136,6 @@ for name, d in [("geophysical", geo), ("chemical", chem), ("integrity", integ)]:
 json.dump(real, open("real_data_summary.json", "w"), indent=2)
 
 json.dump(dict(selected=best, cv={k: dict(mean=v[0], std=v[1]) for k, v in cvres.items()},
-               test_r2=test_r2, test_mae_mm_yr=test_mae, physics_baseline_r2=phys_r2,
-               physics_baseline_corr=phys_corr, rows=len(df), grouped_split=bool(group_col),
-               calibration=calib_res, sklearn=sklearn.__version__, python=platform.python_version()),
+              test_r2=test_r2, test_mae_mm_yr=test_mae, rows=len(df), grouped_split=bool(group_col),
+              calibration=calib_res, sklearn=sklearn.__version__, python=platform.python_version()),
           open("model_card.json", "w"), indent=2)
-print(f"\nDONE  model={best}  test R2={test_r2:.3f}  MAE={test_mae:.4f}  (see model_card.json, real_data_summary.json)")

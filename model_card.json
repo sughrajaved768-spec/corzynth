@@ -1,0 +1,24 @@
+{
+  "selected": "Hist Gradient Boosting",
+  "cv": {
+    "Random Forest": {
+      "mean": 0.8189981158560512,
+      "std": 0.005512154984489389
+    },
+    "Extra Trees": {
+      "mean": 0.8337179256270592,
+      "std": 0.009368618277925329
+    },
+    "Hist Gradient Boosting": {
+      "mean": 0.9445449783168642,
+      "std": 0.00844426524979128
+    }
+  },
+  "test_r2": 0.9527745004088831,
+  "test_mae_mm_yr": 0.002096619675039824,
+  "rows": 5000,
+  "grouped_split": true,
+  "calibration": null,
+  "sklearn": "1.9.1",
+  "python": "3.13.17"
+}

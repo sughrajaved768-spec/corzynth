@@ -3,50 +3,120 @@ the saved corrosion_model.pkl imports add_features from here when it is loaded."
 import numpy as np
 import pandas as pd
 
-TARGET = "Corrosion_Rate_mm_yr"
-COAT_COND = {"Excellent": 0, "Good": 1, "Fair": 2, "Poor": 3}
-COAT_TYPE = {"FBE": 0, "3LPE": 1, "Coal Tar": 2, "Liquid Epoxy": 3, "Polyurethane": 4}
-CATEGORICAL = ["Inhibitor_Type", "Material_Grade"]
-RAW_NUM = ["Operating_Pressure_psi", "Operating_Temperature_F", "Service_Years", "H2S_ppm", "CO2_percent",
-           "pH", "Chlorides_mg_l", "Inhibitor_Dose_ppm", "Inhibitor_Residual_ppm", "Days_Since_Injection",
-           "Soil_Resistivity_ohm_m", "Soil_pH", "Moisture_Content_percent", "CP_Potential_mV", "DCVG_mV",
-           "CIPS_On_mV", "CIPS_Off_mV", "Groundwater_m"]
-RAW_MAPPED = ["Coating_Type", "Coating_Condition"]       # text in the CSV, numeric after add_features
-RAW_COLS = RAW_NUM + RAW_MAPPED + CATEGORICAL
-ENGINEERED = ["CO2_H2S_factor", "TP_factor", "inhibitor_eff", "soil_corrosivity", "acid_load",
-              "chloride_acid", "cp_effectiveness", "protection_score"]
-NUMERIC_ALL = RAW_NUM + RAW_MAPPED + ENGINEERED
 
-def _map(s, mapping, default):
-    m = s.map(mapping)
-    return m.where(m.notna(), pd.to_numeric(s, errors="coerce")).fillna(default)
+TARGET = "Corrosion_Rate_mm_yr"
+
+# ---- Column groups (match Corzynth_Corrosion_Model_Dataset_5000.csv) ----
+CATEGORICAL = ["Fluid_Type", "Material_Grade", "Coating_Condition", "CP_Status", "Inhibitor_Type"]
+
+RAW_NUM = [
+    "Pipe_Diameter_in", "Wall_Thickness_mm", "Service_Years",
+    "Operating_Pressure_psi", "Operating_Temperature_F",
+    "CO2_percent", "H2S_ppm", "pH", "Chlorides_mg_L",
+    "Oil_Rate_bbl_d", "Water_Rate_bbl_d", "Gas_Rate_MMscfd", "Gas_SG",
+    "Velocity_m_s", "Water_Cut_percent",
+    "Inhibitor_Dose_ppm", "Inhibitor_Dose_qt_day", "Residual_Inhibitor_ppm",
+    "Target_Remaining_Life_yr", "Fe_Count_mg_L"
+]
+
+RAW_COLS = RAW_NUM + CATEGORICAL
+
+ENGINEERED = [
+    "CO2_H2S_factor", "TP_factor", "inhibitor_eff", "overdose_factor",
+    "acid_load", "chloride_acid", "cp_effectiveness", "protection_score",
+    "feco3_credit", "flow_severity"
+]
+
+NUMERIC_ALL = RAW_NUM + ENGINEERED
+
+# Columns excluded from features (used only for grouping/calibration)
+EXCLUDED = ["Pipeline_ID", "Segment_ID", "Date", "Notes",
+            "Measured_Rate_Coupon_mm_yr", "UT_Wall_Thickness_mm",
+            "Measured_Wall_Loss_mm", "Calibration_Factor"]
+
+
+def _num(s, default=0.0):
+    return pd.to_numeric(s, errors="coerce").fillna(default)
+
 
 def add_features(df):
     d = df[RAW_COLS].copy()
-    d["Coating_Condition"] = _map(d["Coating_Condition"], COAT_COND, 1)
-    d["Coating_Type"] = _map(d["Coating_Type"], COAT_TYPE, 0)
     for c in RAW_NUM:
-        d[c] = pd.to_numeric(d[c], errors="coerce")
-    d["CO2_H2S_factor"] = d.CO2_percent * d.H2S_ppm / 1000
-    d["TP_factor"] = d.Operating_Temperature_F * d.Operating_Pressure_psi / 1000
-    d["inhibitor_eff"] = d.Inhibitor_Residual_ppm / (d.Inhibitor_Dose_ppm + 1)
-    d["soil_corrosivity"] = d.Moisture_Content_percent * (14 - d.Soil_pH) / d.Soil_Resistivity_ohm_m.clip(lower=1)
-    d["acid_load"] = d.CO2_percent + d.H2S_ppm / 1000
-    d["chloride_acid"] = d.Chlorides_mg_l / (d.pH + 1)
-    d["cp_effectiveness"] = (d.CP_Potential_mV + 1200) / 700
+        d[c] = _num(d[c])
+
+    # ---- Engineered features ----
+    d["CO2_H2S_factor"] = d.CO2_percent * (d.H2S_ppm / 1000.0)
+    d["TP_factor"] = d.Operating_Temperature_F * d.Operating_Pressure_psi / 1000.0
+
+    # Residual-driven inhibitor efficiency (matches app logic)
+    resid = d.Residual_Inhibitor_ppm
+    eff = np.where(resid > 0,
+                   np.minimum(0.95, 0.75 + resid / 100.0),
+                   0.75)
+    eff = np.where((resid > 0) & (resid < 10), eff * 0.5, eff)
+    d["inhibitor_eff"] = eff
+
+    # Overdose penalty
+    d["overdose_factor"] = np.where(resid > 300, 1.25,
+                             np.where(resid > 100, 1.15,
+                               np.where(resid > 40, 1.05, 1.0)))
+
+    d["acid_load"] = d.CO2_percent + d.H2S_ppm / 1000.0
+    d["chloride_acid"] = d.Chlorides_mg_L / (d.pH.clip(lower=0.1) + 1.0)
+
+    # CP effectiveness proxy (higher = more protective)
+    d["cp_effectiveness"] = np.where(d.CP_Status == "Yes", 1.0, 0.0)
+
+    # Combined protection score
     d["protection_score"] = d.cp_effectiveness * d.inhibitor_eff
+
+    # FeCO3 scale credit (matches app logic)
+    d["feco3_credit"] = np.where(
+        (d.Operating_Temperature_F > 150) & (d.pH >= 6.0), 0.74,
+        np.where(d.pH >= 5.0, 0.84, 0.94))
+
+    # Flow severity (velocity + water cut interaction)
+    d["flow_severity"] = d.Velocity_m_s * (d.Water_Cut_percent / 100.0)
+
     return d.replace([np.inf, -np.inf], np.nan)
 
+
 def physics_rate(df):
-    """Approximate de Waard-Milliams rate for a sanity baseline (no fluid factor; CP <= -850 mV halves rate)."""
-    tk = (df.Operating_Temperature_F - 32) * 5 / 9 + 273.15
-    p = np.minimum(df.Operating_Pressure_psi * 0.0689476, 250)
-    f = (10 ** (p * (0.0031 - 1.4 / tk)) * df.CO2_percent / 100 * p).clip(lower=1e-9)
-    v = 10 ** (5.8 - 1710 / tk + 0.67 * np.log10(f))
+    """Simplified de Waard-Milliams baseline with correct units."""
+    tk = (df.Operating_Temperature_F - 32) * 5.0 / 9.0 + 273.15
+    p_atm = df.Operating_Pressure_psi * 0.068046
+    pco2 = ((df.CO2_percent / 100.0) * p_atm).clip(lower=1e-6)
+
+    # Correct de Waard-Milliams form: rate depends on pCO2 and temperature
+    log_f = np.log10(pco2) - 0.0031 * pco2 - 1.4 / tk
+    v = 10 ** (5.8 - 1710.0 / tk + 0.67 * log_f)
+
+    # pH correction
     v *= np.where(df.pH < 4.5, 1.3, np.where(df.pH > 6.5, 0.6, 1.0))
-    dose = df.Inhibitor_Dose_ppm
-    v *= np.where(dose > 0, 1 - np.minimum(0.95, 0.5 + dose / 100), 1.0)
-    cond = _map(df.Coating_Condition, COAT_COND, 1)
-    v *= cond.map({0: 0.3, 1: 0.5, 2: 0.8, 3: 1.0}).fillna(0.5)
-    v *= np.where(df.CP_Potential_mV <= -850, 0.5, 1.0)
-    return v
+
+    # Inhibitor (residual-driven)
+    resid = df.Residual_Inhibitor_ppm
+    eff = np.where(resid > 0, np.minimum(0.95, 0.75 + resid / 100.0), 0.0)
+    eff = np.where((resid > 0) & (resid < 10), eff * 0.5, eff)
+    v *= (1.0 - eff)
+
+    # Coating
+    coat = df.Coating_Condition.map({"Good": 0.5, "Fair": 0.75, "Poor": 1.0}).fillna(0.75)
+    v *= coat
+
+    # CP
+    v *= np.where(df.CP_Status == "Yes", 0.5, 1.0)
+
+    # Fluid factor
+    v *= np.where(df.Fluid_Type == "Multiphase", 1.15,
+           np.where(df.Fluid_Type == "Gas", 0.7, 1.0))
+
+    # Water cut / velocity / chloride / H2S / FeCO3
+    v *= np.where((df.Water_Cut_percent >= 20) & (df.Water_Cut_percent <= 40), 0.7, 1.0)
+    v *= np.where(df.Velocity_m_s > 3, 1.15, 1.0)
+    v *= np.where(df.Chlorides_mg_L > 10000, 1.1, 1.0)
+    v *= np.where(df.H2S_ppm > 500, 1.3, 1.0)
+    v *= np.where((df.Operating_Temperature_F > 150) & (df.pH >= 6.0), 0.74,
+           np.where(df.pH >= 5.0, 0.84, 0.94))
+
+    return v.clip(lower=1e-6, upper=50.0)

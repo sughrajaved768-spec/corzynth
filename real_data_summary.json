@@ -1,0 +1,54 @@
+{
+  "injection": {
+    "points": 27,
+    "neat_inhibitor_L_per_day": 74.0,
+    "missing_gas_rate": 1,
+    "dose_changed": 1
+  },
+  "kpi": {
+    "percent_kpis": 42,
+    "below_80": 15,
+    "worst": [
+      {
+        "KPI": "Water quality testing",
+        "Metric": "Conformance",
+        "Overall": 21
+      },
+      {
+        "KPI": "Buried plant piping CP monitoring",
+        "Metric": "Conformance",
+        "Overall": 34
+      },
+      {
+        "KPI": "Pipeline CP monitoring survey",
+        "Metric": "Conformance",
+        "Overall": 42
+      },
+      {
+        "KPI": "JP residual testing",
+        "Metric": "Conformance",
+        "Overall": 43
+      },
+      {
+        "KPI": "CP yearly audit",
+        "Metric": "Conformance",
+        "Overall": 51
+      }
+    ]
+  },
+  "dataset_context": {
+    "mean_residual_to_dose_ratio": 0.8839472691362069
+  },
+  "geophysical": {
+    "rows": 5000,
+    "columns": 12
+  },
+  "chemical": {
+    "rows": 1700,
+    "columns": 21
+  },
+  "integrity": {
+    "rows": 100,
+    "columns": 22
+  }
+}
