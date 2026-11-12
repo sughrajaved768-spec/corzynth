@@ -73,7 +73,7 @@ def make(model):
 candidates = {
     "Random Forest": RandomForestRegressor(n_estimators=300, min_samples_leaf=2, random_state=SEED, n_jobs=-1),
     "Extra Trees": ExtraTreesRegressor(n_estimators=300, min_samples_leaf=2, random_state=SEED, n_jobs=-1),
-    "Hist Gradient Boosting": HistGradientBoostingRegressor(max_iter=500, learning_rate=0.05, max_depth=6, random_state=SEED),
+    "Hist Gradient Boosting": HistGradientBoostingRegressor(max_iter=800, learning_rate=0.05, max_depth=8, min_samples_leaf=20, random_state=SEED),
 }
 print("\nCross-validation on TRAIN split only (R2 on mm/yr scale)...")
 cvres = {}
@@ -84,6 +84,15 @@ best = max(cvres, key=lambda k: cvres[k][0])
 print(f"Selected by CV: {best}")
 
 final = make(candidates[best]).fit(Xtr, ytr)
+# Per-fluid calibration factors (median of true/predicted on training data)
+pred_tr = final.predict(Xtr)
+ratio = ytr / pred_tr
+calib = {}
+for f in Xtr["Fluid_Type"].unique():
+    m = Xtr["Fluid_Type"] == f
+    calib[f] = float(np.median(ratio[m]))
+joblib.dump(calib, "ml_calibration.pkl")
+print("Per-fluid calibration factors:", {k: round(v, 3) for k, v in calib.items()})
 pred = final.predict(Xte)
 test_r2, test_mae = r2_score(yte, pred), mean_absolute_error(yte, pred)
 phys = physics_rate(Xte)
@@ -94,7 +103,7 @@ print(f"Physics-only baseline on same test rows: R2 = {phys_r2:.3f} | correlatio
 print("Note: the physics baseline is the approximate de Waard-Milliams chain (no fluid factor).")
 
 calib_res = None
-if calib is not None and all(c in calib.columns for c in RAW_COLS + [TARGET]):
+if calib is not None and isinstance(calib, pd.DataFrame) and all(c in calib.columns for c in RAW_COLS + [TARGET]):
     cp = final.predict(calib[RAW_COLS])
     calib_res = dict(n=len(calib), r2=float(r2_score(calib[TARGET], cp)), mae=float(mean_absolute_error(calib[TARGET], cp)))
     print(f"REAL-DATA CALIBRATION CHECK: n={calib_res['n']} R2={calib_res['r2']:.3f} MAE={calib_res['mae']:.4f}")

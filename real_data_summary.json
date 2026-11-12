@@ -37,7 +37,7 @@
     ]
   },
   "dataset_context": {
-    "mean_residual_to_dose_ratio": 25.527950842485165
+    "mean_residual_to_dose_ratio": 6.275983008632839
   },
   "geophysical": {
     "rows": 5000,
