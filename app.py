@@ -361,12 +361,11 @@ def full_calculation(v):
         f"({v.get('residual_qt', 0):.1f} qt) → effective {effective_ppm:.0f} ppm "
         f"→ {inh_eff*100:.1f}% reduction → {rate_inh:.3f} mm/yr")
 
-    # ── Overdose Penalty (Literature-Based) ──
+        # ── Overdose Penalty (Literature-Based) ──
     od_pen = overdose_penalty(residual_ppm)
     rate_inh = rate_inh * od_pen
     steps["9b. Overdose Penalty"] = (
         f"Residual {residual_ppm:.0f} ppm → ×{od_pen:.2f} = {rate_inh:.3f} mm/yr")
-
     cm = COATING_FACTOR[v["coating_condition"]]
     rate_coat = rate_inh * cm
     steps["10. Coating Protection"] = f"{v['coating_condition']} → ×{cm} = {rate_coat:.3f} mm/yr"
@@ -1206,12 +1205,28 @@ elif page == "🔮 Prediction":
 
 
                 if opt_status == "severe_overdose":
-                    st.error(
-                        f"🚨 **SEVERE OVERDOSE** — Residual: "
-                        f"{v.get('residual_ppm', 0):.0f} ppm (>300 ppm). "
-                        f"Overdose penalty ×1.25 active — corrosion is worse, not better.\n\n"
-                        f"**Action:** Cut dose immediately to ~50 ppm residual. "
-                        f"Current rate: {opt_rate:.3f} mm/yr.")
+                    col_alert, col_table = st.columns([2, 1])
+                    with col_alert:
+                        st.error(
+                            f"🚨 **SEVERE OVERDOSE** — Residual: "
+                            f"{v.get('residual_ppm', 0):.0f} ppm (>300 ppm). "
+                            f"Overdose penalty ×1.25 active — corrosion is worse, not better.\n\n"
+                            f"**Action:** Cut dose immediately to ~50 ppm residual. "
+                            f"Current rate: {opt_rate:.3f} mm/yr.")
+                    with col_table:
+                        with st.container(border=True):
+                            st.markdown("""
+**⚠️ Why the penalty applies**
+
+| Residual | Penalty |
+|---|---|
+| 0–40 ppm | ×1.00 |
+| 41–100 ppm | ×1.05 |
+| 101–300 ppm | ×1.15 |
+| >300 ppm | ×1.25 |
+
+Beyond ~40 ppm, more inhibitor gives no benefit and can disrupt the protective film.
+""")
                 elif opt_status == "overdose":
                     # Check if reducing to 50 ppm would actually meet target
                     vd_check = {**v, "dose": 50,
