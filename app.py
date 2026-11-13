@@ -154,14 +154,15 @@ def interpret_inputs(v):
     else:
         notes.append(("🔴", f"Inhibitor residual is {residual:.0f} ppm — **too high**. This can cause deposits and emulsions. Reduce the dose."))
 
-    if velocity > 5:
-        notes.append(("⚠️", f"Flow speed is high ({velocity:.1f} m/s) — can wear away the pipe surface over time."))
+    if velocity <= 3.0:
+        notes.append(f"✅ Flow speed is {velocity:.1f} m/s — safe range.")
+    elif velocity <= 6.0:
+        notes.append(f"⚠️ Flow speed is {velocity:.1f} m/s — slightly high; velocity correction ×1.15 applies.")
     else:
-        notes.append(("✅", f"Flow speed is {velocity:.1f} m/s — safe range."))
-
+        notes.append(f"🔴 Flow speed is {velocity:.1f} m/s — high; velocity correction ×1.30 applies.")
     return notes
 def evaluate_inputs(v, final_rate, remaining_life, target_life=10.0):
-    """Simple verdict: is my dose right? Is my pipe wall thick enough?"""
+    """Simple verdict: is my dose right? Is my pipe wall thick enough"""
     target_rate = v["wt"] / target_life if target_life > 0 else 0.2
     residual = v.get("residual_ppm", 0)
     wt = v["wt"]
@@ -711,6 +712,7 @@ def calculate_velocity(flow_fluid, flow_rate, pipe_dia_in, line_psi, temp_f,
 def save_result_csv(v, rate, life_raw, risk, filename="corzynth_results.csv"):
     row = {
         "Saved At": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Well / Stream Name": v.get("well_name", ""),
         "Fluid": v.get("fluid", ""),
         "Pressure (psi)": v.get("pressure", ""),
         "Temperature (F)": v.get("temp", ""),
@@ -748,12 +750,15 @@ def make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
     from docx import Document
     from io import BytesIO
     doc = Document()
-    doc.add_heading("Corzynth — Complete Corrosion Integrity Report", 0)
+    well_name = v.get("well_name", "").strip()
+    title_suffix = f" — {well_name}" if well_name else ""
+    doc.add_heading(f"Corzynth — Complete Corrosion Integrity Report{title_suffix}", 0)
     doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     doc.add_paragraph("📍 Scope: SPECIFIC well/plant only.")
     doc.add_heading("1. Well / Plant Inputs", level=1)
     inputs_data = [
-        ("Fluid Type", v.get("fluid", "")),
+        ("Well / Stream Name", v.get("well_name", "")),
+        ("Fluid Type", v.get("fluid", "")),   
         ("Pressure (psi)", v.get("pressure", "")),
         ("Temperature (°F)", v.get("temp", "")),
         ("Wall Thickness (mm)", v.get("wt", "")),
@@ -819,6 +824,7 @@ def make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
     for _, row in proj_df.iterrows():
         cells = t.add_row().cells
         for i, val in enumerate(row):
+        
             cells[i].text = str(val)
     doc.add_heading("8. Recommendations", level=1)
     if life_raw > 40:
@@ -1026,8 +1032,14 @@ elif page == "🔮 Prediction":
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("**🔧 Operating Conditions**")
+                well_name = st.text_input(
+                   "Well / Stream Name",
+                    value="",
+                    placeholder="e.g., Well ABC-01 or North Line",
+                    key=f"{key_prefix}_wellname"
+                )
                 fluid = st.selectbox("Material Flowing in Pipe", [d["fluid"]],
-                                     key=f"{key_prefix}_fluid")
+                                         key=f"{key_prefix}_fluid")
                 pressure = st.number_input("Pressure (psi)", 0, 5000, 1000, 50, key=f"{key_prefix}_p")
                 temp = st.number_input("Temperature (°F)", 32, 400, 150, 5, key=f"{key_prefix}_t")
                 wt = st.number_input("Wall Thickness (mm)", 1.0, 50.0, 8.0, 0.5, key=f"{key_prefix}_wt")
@@ -1084,7 +1096,7 @@ elif page == "🔮 Prediction":
 
             if st.button(f"🔮 Calculate — {tab_name}", type="primary",
                          use_container_width=True, key=f"{key_prefix}_calc"):
-                v = dict(fluid=fluid, pressure=pressure, temp=temp, wt=wt,
+                v = dict(fluid=fluid, well_name=well_name, pressure=pressure, temp=temp, wt=wt,
                          min_required_wall=min_required_wall,
                          material=material, coating_condition=coating_condition,
                          cp_on=cp_on, co2=co2, h2s=h2s, ph=ph, dose=dose,
@@ -1101,6 +1113,8 @@ elif page == "🔮 Prediction":
                 v, rate, life, life_raw, risk, emoji, steps = st.session_state[f"{key_prefix}_result"]
                 st.caption("📍 **Result applies to this specific well/plant only.**")
                 st.subheader("📊 Integrity Assessment")
+                if v.get("well_name", "").strip():
+                    st.info(f"📍 **Report for:** {v.get('well_name', '').strip()}")
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Corrosion Rate", f"{rate:.3f} mm/yr")
                 m2.metric("Remaining Life",
@@ -1275,10 +1289,49 @@ Beyond ~40 ppm, more inhibitor gives no benefit and can disrupt the protective f
                         f"**Continuous form:** {opt_ml_min:.2f} mL/min | "
                         f"Predicted rate: {opt_rate:.3f} mm/yr | "
                         f"Estimated life: {est_life:.1f} yr")
-                st.subheader("🧭 What Do My Inputs Mean?")
-                for icon, note in interpret_inputs(v):
-                    st.markdown(f"{icon} {note}")
+                st.markdown("### 🧭 What Do My Inputs Mean? & 📋 Ideal / Optimal Ranges")
 
+                col_notes, col_table = st.columns([1, 1], gap="large")
+
+                with col_notes:
+                    st.markdown("#### 🔍 Interpretation of Your Inputs")
+                    for note in interpret_inputs(v):
+                        if isinstance(note, tuple):
+                            st.markdown(f"{note[0]} {note[1]}")
+                        else:
+                            st.markdown(note)
+                with col_table:
+                    st.markdown("#### 📋 Ideal / Optimal Ranges")
+
+                    import pandas as pd
+
+                    def status_icon(ok):
+                        return "✅ OK" if ok else "⚠️ Review"
+
+                    table_data = [
+                        {"Input": "CO₂", "Ideal Range": "< 5%", "Your Value": f"{v.get('co2', 0):.1f}%", "Status": status_icon(v.get('co2', 0) < 5)},
+                        {"Input": "Temperature", "Ideal Range": "< 200°F", "Your Value": f"{v.get('temp', 0):.0f}°F", "Status": status_icon(v.get('temp', 0) < 200)},
+                        {"Input": "pH", "Ideal Range": "6.0–7.0", "Your Value": f"{v.get('ph', 0):.1f}", "Status": status_icon(6.0 <= v.get('ph', 0) <= 7.0)},
+                        {"Input": "H₂S", "Ideal Range": "< 50 ppm", "Your Value": f"{v.get('h2s', 0):.0f} ppm", "Status": status_icon(v.get('h2s', 0) < 50)},
+                        {"Input": "Chlorides", "Ideal Range": "< 10,000 mg/L", "Your Value": f"{v.get('chlorides', 0):,.0f} mg/L", "Status": status_icon(v.get('chlorides', 0) < 10000)},
+                        {"Input": "Residual Inhibitor", "Ideal Range": "20–50 ppm", "Your Value": f"{v.get('residual_ppm', 0):.0f} ppm", "Status": status_icon(20 <= v.get('residual_ppm', 0) <= 50)},
+                        {"Input": "Velocity", "Ideal Range": "≤ 3.0 m/s", "Your Value": f"{v.get('velocity', 0):.2f} m/s", "Status": status_icon(v.get('velocity', 0) <= 3.0)},
+                        {"Input": "Water Cut", "Ideal Range": "< 40%", "Your Value": f"{v.get('water_cut', 0):.0f}%", "Status": status_icon(v.get('water_cut', 0) < 40)},
+                    ]
+
+                    ideal_df = pd.DataFrame(table_data)
+
+                    st.dataframe(
+                        ideal_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Input": st.column_config.TextColumn("Input", width="medium"),
+                            "Ideal Range": st.column_config.TextColumn("Ideal Range", width="medium"),
+                            "Your Value": st.column_config.TextColumn("Your Value", width="medium"),
+                            "Status": st.column_config.TextColumn("Status", width="small"),
+                        }
+                    )
                 st.subheader("📋 Is My Setup Correct?")
                 inh, wall, overall = evaluate_inputs(v, rate, life, target_life)
                 st.info(f"{inh[0]} {inh[1]}")
@@ -1288,6 +1341,8 @@ Beyond ~40 ppm, more inhibitor gives no benefit and can disrupt the protective f
                 else:
                   st.warning(f"{overall[0]} {overall[1]}")
                 st.markdown("### 🎯 Smart Recommendation")
+                if v.get("well_name", "").strip():
+                  st.markdown(f"📍 **Well / Stream:  ** {v.get('well_name', '').strip()}")               
                 rec = smart_recommendation(v, rate, life, target_life, price_per_gallon)
                 for icon, text in rec:
                     st.markdown(f"{icon} {text}")
@@ -1303,15 +1358,137 @@ Beyond ~40 ppm, more inhibitor gives no benefit and can disrupt the protective f
                 st.subheader("📊 Sensitivity Analysis")
                 sens_df = sensitivity_analysis(v, rate)
                 st.dataframe(sens_df, use_container_width=True)
+                             
+                st.subheader("📊 Life Projection — Year by Year")
 
-                st.subheader("📈 Life Projection")
-                chart_df, proj_df = make_life_projection(wt, rate, life_raw)
-                st.line_chart(chart_df)
-                st.dataframe(proj_df, use_container_width=True)
+                import plotly.graph_objects as go
 
-                word_file = make_word_report(proj_df, wt, rate, life_raw, v, steps,
-                        None, sens_df, opt_dose, opt_qt_day, risk)
-                st.download_button("📄 Download Complete Word Report",
+                # ── Build year-by-year projection data inline ──
+                max_year = int(min(life + 5, 60))
+                proj_rows = []
+                for yr in range(0, max_year + 1):
+                    loss = rate * yr
+                    remaining = max(0, wt - loss)
+                    if remaining <= 0:
+                        status = "🔴 Failed — Wall Fully Consumed"
+                        color = "#e74c3c"
+                    elif remaining <= wt * 0.25:
+                        status = "🟠 Critical — Plan Replacement"
+                        color = "#f39c12"
+                    else:
+                        status = "🟢 Healthy"
+                        color = "#2ecc71"
+                    proj_rows.append({
+                        "Year": yr,
+                        "Metal Loss (mm)": round(loss, 2),
+                        "Remaining Wall (mm)": round(remaining, 2),
+                        "Status": status,
+                        "Color": color
+                    })
+                projdf = pd.DataFrame(proj_rows)
+
+                # ── Interactive dark-themed chart ──
+                fig = go.Figure()
+
+                fig.add_trace(go.Bar(
+                    x=projdf["Year"],
+                    y=projdf["Remaining Wall (mm)"],
+                    marker_color=projdf["Color"],
+                    text=projdf["Remaining Wall (mm)"],
+                    textposition="outside",
+                    name="Remaining Wall (mm)",
+                    hovertemplate=(
+                        "<b>Year %{x}</b><br>"
+                        "Remaining Wall: %{y:.2f} mm<br>"
+                        "Metal Loss: %{customdata[0]:.2f} mm<br>"
+                        "Status: %{customdata[1]}<extra></extra>"
+                    ),
+                    customdata=list(zip(
+                        projdf["Metal Loss (mm)"],
+                        projdf["Status"]
+                    ))
+                ))
+
+                # Critical threshold line (25% of original wall)
+                critical_wall = wt * 0.25
+                fig.add_hline(
+                    y=critical_wall,
+                    line_dash="dash",
+                    line_color="#f39c12",
+                    annotation_text=f"⚠️ Critical Threshold ({critical_wall:.1f} mm)",
+                    annotation_position="top right",
+                    annotation_font=dict(color="#f39c12", size=12)
+                )
+
+                # Vertical line where remaining life ends
+                life_end_year = int(life) if life < 60 else 60
+                fig.add_vline(
+                    x=life_end_year,
+                    line_dash="dash",
+                    line_color="#e74c3c",
+                    annotation_text=f"🔴 Life Ends (~{life:.0f} yrs)",
+                    annotation_position="top left",
+                    annotation_font=dict(color="#e74c3c", size=12)
+                )
+
+                fig.update_layout(
+                    title={
+                        "text": "Pipeline Life Projection — Year by Year",
+                        "font": dict(size=20, color="#ecf0f1")
+                    },
+                    xaxis=dict(
+                        title="Year",
+                        gridcolor="#34495e",
+                        zerolinecolor="#34495e"
+                    ),
+                    yaxis=dict(
+                        title="Remaining Wall (mm)",
+                        gridcolor="#34495e",
+                        zerolinecolor="#34495e"
+                    ),
+                    hovermode="x unified",
+                    template="plotly_dark",
+                    paper_bgcolor="#1a2530",
+                    plot_bgcolor="#1a2530",
+                    font=dict(color="#ecf0f1"),
+                    showlegend=False,
+                    margin=dict(l=50, r=50, t=70, b=50),
+                    height=450
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+                # ── Styled year-by-year projection table ──
+                st.markdown("#### 📋 Year-by-Year Wall Projection")
+
+                def color_status(val):
+                    if "Failed" in val:
+                        return "background-color: #c0392b; color: white; font-weight: bold;"
+                    elif "Critical" in val:
+                        return "background-color: #e67e22; color: white; font-weight: bold;"
+                    else:
+                        return "background-color: #27ae60; color: white; font-weight: bold;"
+
+                styled_table = projdf[["Year", "Metal Loss (mm)", "Remaining Wall (mm)", "Status"]].style.map(
+                    color_status, subset=["Status"]
+                ).set_properties(**{
+                    "text-align": "center",
+                    "font-size": "14px"
+                }).hide(axis="index")
+
+                st.dataframe(styled_table, use_container_width=True)
+
+                sensdf = sensitivity_analysis(v, rate)
+                target_rate = v["wt"] / life if life > 0 else 0.2
+                optdose, optrate, *_ = find_optimal_dose(v, target_rate)
+                optqtday = optdose * v.get("dose_water_bbl", 100) * 0.00035
+
+
+                word_file = make_word_report(
+                    projdf, wt, rate, life, v, steps,
+                    None, sensdf, optdose, optqtday, risk
+                )
+                st.download_button(
+                    "📄 Download Complete Word Report",
                                    data=word_file, file_name=f"Corzynth_{key_prefix}_Report.docx",
                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                    key=f"{key_prefix}_word")
@@ -1519,16 +1696,90 @@ elif page == "📊 Multi-Well Dashboard":
                 c4.metric("Avg Remaining Life", f"{capped_life.mean():.1f} yrs",
                           "capped at 40-yr design life")
             st.subheader("📋 All Saved Wells")
-            show_cols = [c for c in ["Saved At", "Fluid", "Corrosion Rate (mm/yr)",
+            show_cols = [c for c in ["Well / Stream Name", "Saved At", "Fluid", "Corrosion Rate (mm/yr)",
                                      "Remaining Life (yrs)", "Risk",
                                      "Inhibitor (quarts/day)", "Velocity (m/s)",
-                                     "Water Cut (%)"] if c in df.columns]
+                                     "Water Cut (%)"] if c in df.columns]           
             st.dataframe(df[show_cols], use_container_width=True)
             if "Corrosion Rate (mm/yr)" in df.columns:
                 st.subheader("📊 Corrosion Rate by Well")
+                import plotly.graph_objects as go
+
                 chart_df = df.copy()
-                chart_df["Well"] = ["Well " + str(i + 1) for i in range(len(chart_df))]
-                st.bar_chart(chart_df.set_index("Well")[["Corrosion Rate (mm/yr)"]])
+                if "Well / Stream Name" in chart_df.columns:
+                    chart_df["Well"] = chart_df["Well / Stream Name"].fillna("Unnamed Well")
+                else:
+                    chart_df["Well"] = ["Well " + str(i + 1) for i in range(len(chart_df))]
+
+                # Color each bar by risk level
+                def risk_color(risk):
+                    if risk == "HIGH":
+                        return "#e74c3c"
+                    elif risk == "MEDIUM":
+                        return "#f39c12"
+                    else:
+                        return "#2ecc71"
+
+                bar_colors = [risk_color(r) for r in chart_df["Risk"]]
+
+                fig = go.Figure()
+
+                fig.add_trace(go.Bar(
+                    y=chart_df["Well"],
+                    x=chart_df["Corrosion Rate (mm/yr)"],
+                    orientation="h",
+                    marker_color=bar_colors,
+                    text=chart_df["Corrosion Rate (mm/yr)"].round(3),
+                    textposition="outside",
+                    name="Corrosion Rate",
+                    hovertemplate=(
+                        "<b>%{y}</b><br>"
+                        "Corrosion Rate: %{x:.3f} mm/yr<br>"
+                        "Risk: %{customdata[0]}<br>"
+                        "Remaining Life: %{customdata[1]:.1f} yrs<extra></extra>"
+                    ),
+                    customdata=list(zip(
+                        chart_df["Risk"],
+                        chart_df["Remaining Life (yrs)"]
+                    ))
+                ))
+
+                # High-corrosion threshold line (0.5 mm/yr)
+                fig.add_vline(
+                    x=0.5,
+                    line_dash="dash",
+                    line_color="#e74c3c",
+                    annotation_text="⚠️ High Corrosion (0.5 mm/yr)",
+                    annotation_position="top right",
+                    annotation_font=dict(color="#e74c3c", size=12)
+                )
+
+                fig.update_layout(
+                    title={
+                        "text": "Corrosion Rate by Well / Stream",
+                        "font": dict(size=20, color="#ecf0f1")
+                    },
+                    xaxis=dict(
+                        title="Corrosion Rate (mm/yr)",
+                        gridcolor="#34495e",
+                        zerolinecolor="#34495e"
+                    ),
+                    yaxis=dict(
+                        title="Well / Stream Name",
+                        gridcolor="#34495e",
+                        autorange="reversed"
+                    ),
+                    hovermode="y unified",
+                    template="plotly_dark",
+                    paper_bgcolor="#1a2530",
+                    plot_bgcolor="#1a2530",
+                    font=dict(color="#ecf0f1"),
+                    showlegend=False,
+                    margin=dict(l=150, r=50, t=70, b=50),
+                    height=max(300, 40 * len(chart_df))
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
             if "Risk" in df.columns:
                 st.subheader("🚦 Risk Distribution")
                 risk_counts = df["Risk"].value_counts()
