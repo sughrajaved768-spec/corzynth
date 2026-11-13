@@ -241,6 +241,33 @@ def smart_recommendation(v, rate, life, target_life=10.0, price_per_gallon=3.0):
 
     return lines
 
+def make_life_projection_chart(proj_df):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import io
+
+    # Auto-detect column names
+    year_col = next((c for c in proj_df.columns if "year" in c.lower()), proj_df.columns[0])
+    wall_col = next((c for c in proj_df.columns if "remaining" in c.lower() and "wall" in c.lower()),
+                    proj_df.columns[1] if len(proj_df.columns) > 1 else proj_df.columns[0])
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(proj_df[year_col], proj_df[wall_col],
+            marker="o", linewidth=2.5, color="#0b3d62", label="Remaining Wall")
+    ax.axhline(y=0, color="#e74c3c", linestyle="--", linewidth=2, label="Failure Limit")
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Remaining Wall")
+    ax.set_title("Pipeline Life Projection — Year by Year")
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
 # ══════════════════════════════════════════════════════════════════════════
 #  LOGIN
 # ══════════════════════════════════════════════════════════════════════════
@@ -744,10 +771,10 @@ def save_result_csv(v, rate, life_raw, risk, filename="corzynth_results.csv"):
 # ══════════════════════════════════════════════════════════════════════════
 #  WORD REPORT
 # ══════════════════════════════════════════════════════════════════════════
-
 def make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
                      sens_df, opt_dose, opt_qt_day, risk):
     from docx import Document
+    from docx.shared import Inches
     from io import BytesIO
     doc = Document()
     well_name = v.get("well_name", "").strip()
@@ -755,13 +782,16 @@ def make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
     doc.add_heading(f"Corzynth — Complete Corrosion Integrity Report{title_suffix}", 0)
     doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     doc.add_paragraph("📍 Scope: SPECIFIC well/plant only.")
+
+    # ── 1. Well / Plant Inputs ──
     doc.add_heading("1. Well / Plant Inputs", level=1)
     inputs_data = [
         ("Well / Stream Name", v.get("well_name", "")),
-        ("Fluid Type", v.get("fluid", "")),   
+        ("Fluid Type", v.get("fluid", "")),
         ("Pressure (psi)", v.get("pressure", "")),
         ("Temperature (°F)", v.get("temp", "")),
         ("Wall Thickness (mm)", v.get("wt", "")),
+        ("Minimum Required Wall (mm)", v.get("minrequiredwall", "")),
         ("Material Grade", v.get("material", "")),
         ("Coating Condition", v.get("coating_condition", "")),
         ("Cathodic Protection", v.get("cp_on", "")),
@@ -785,59 +815,174 @@ def make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
         cells = t.add_row().cells
         cells[0].text = str(name)
         cells[1].text = str(val)
+
+    # ── 2. Integrity Assessment Results ──
     doc.add_heading("2. Integrity Assessment Results", level=1)
     doc.add_paragraph(f"Corrosion Rate: {rate:.3f} mm/yr")
     doc.add_paragraph(f"Remaining Life: {life_raw:.1f} years")
+    doc.add_paragraph(f"Service Years: {v.get('serviceyears', '')} yr")
     doc.add_paragraph(f"Risk Level: {risk}")
-    doc.add_heading("3. Best Inhibitor Dose", level=1)
-    doc.add_paragraph(f"Optimized Dose: {opt_dose} ppm = {opt_qt_day:.2f} quarts/day")
-    doc.add_heading("4. Re-dosing Schedule", level=1)
-    if redose_df is not None:
-        t = doc.add_table(rows=1, cols=len(redose_df.columns))
-        t.style = "Light Grid Accent 1"
-        for i, col in enumerate(redose_df.columns):
-            t.rows[0].cells[i].text = str(col)
-        for _, row in redose_df.iterrows():
-            cells = t.add_row().cells
-            for i, val in enumerate(row):
-                cells[i].text = str(val)
-    doc.add_heading("5. Calculation Breakdown", level=1)
+    if v.get("h2s", 0) >= 500:
+        doc.add_paragraph("⚠️ NACE MR0175 Sour Service: H2S >= 500 ppm")
+    elif rate >= 0.5:
+        doc.add_paragraph("⚠️ Corrosion rate is above 0.5 mm/yr. Review inhibitor residual, corrosion monitoring, and protection performance.")
+    else:
+        doc.add_paragraph("✅ NACE MR0175: No compliance flags")
+    if v.get("chlorides", 0) > 50000:
+        doc.add_paragraph("⚠️ High Chlorides — pitting risk. Consider alloy upgrade.")
+
+    # ── 3. Dose Optimizer ──
+    doc.add_heading("3. Dose Optimizer — Daily & Continuous", level=1)
+    residual_ppm = v.get("residual_ppm", 0)
+    if residual_ppm > 300:
+        doc.add_paragraph(f"🚨 SEVERE OVERDOSE — Residual: {residual_ppm:.0f} ppm (>300 ppm). Overdose penalty ×1.25 active — corrosion is worse, not better.")
+        doc.add_paragraph("Action: Cut dose immediately to ~50 ppm residual.")
+    elif residual_ppm > 100:
+        doc.add_paragraph(f"⚠️ OVERDOSE — Residual: {residual_ppm:.0f} ppm (>100 ppm). Overdose penalty ×1.15 active.")
+    elif residual_ppm > 40:
+        doc.add_paragraph(f"⚠️ Slight Overdose — Residual: {residual_ppm:.0f} ppm (>40 ppm). Overdose penalty ×1.05 active.")
+    else:
+        doc.add_paragraph(f"✅ OPTIMAL RESIDUAL: {residual_ppm:.0f} ppm — Literature-calibrated protection zone (20-50 ppm = 95%+ inhibition efficiency).")
+    doc.add_paragraph(f"Daily basis: {v.get('daily_qt', 0):.2f} quarts/day | Predicted rate: {rate:.3f} mm/yr | Estimated life: {life_raw:.1f} yr")
+
+    doc.add_heading("3b. Why the Penalty Applies", level=2)
+    penalty_table = doc.add_table(rows=1, cols=2)
+    penalty_table.style = "Light Grid Accent 1"
+    penalty_table.rows[0].cells[0].text = "Residual"
+    penalty_table.rows[0].cells[1].text = "Penalty"
+    for res_range, pen in [("0–40 ppm", "×1.00"), ("41–100 ppm", "×1.05"),
+                            ("101–300 ppm", "×1.15"), (">300 ppm", "×1.25")]:
+        cells = penalty_table.add_row().cells
+        cells[0].text = res_range
+        cells[1].text = pen
+    doc.add_paragraph("Beyond ~40 ppm, more inhibitor gives no benefit and can disrupt the protective film.")
+
+    # ── 4. What Do My Inputs Mean? ──
+    doc.add_heading("4. What Do My Inputs Mean?", level=1)
+    for note in interpret_inputs(v):
+        if isinstance(note, tuple):
+            doc.add_paragraph(f"{note[0]} {note[1]}")
+        else:
+            doc.add_paragraph(note)
+
+    # ── 5. Ideal / Optimal Ranges ──
+    doc.add_heading("5. Ideal / Optimal Ranges", level=1)
+    def status_icon(ok):
+        return "✅ OK" if ok else "⚠️ Review"
+    ideal_rows = [
+        ("CO2", "< 5%", f"{v.get('co2', 0):.1f}%", v.get('co2', 0) < 5),
+        ("Temperature", "< 200°F", f"{v.get('temp', 0):.0f}°F", v.get('temp', 0) < 200),
+        ("pH", "6.0–7.0", f"{v.get('ph', 0):.1f}", 6.0 <= v.get('ph', 0) <= 7.0),
+        ("H2S", "< 50 ppm", f"{v.get('h2s', 0):.0f} ppm", v.get('h2s', 0) < 50),
+        ("Chlorides", "< 10,000 mg/L", f"{v.get('chlorides', 0):,.0f} mg/L", v.get('chlorides', 0) < 10000),
+        ("Residual Inhibitor", "20–50 ppm", f"{v.get('residual_ppm', 0):.0f} ppm", 20 <= v.get('residual_ppm', 0) <= 50),
+        ("Velocity", "≤ 3.0 m/s", f"{v.get('velocity', 0):.2f} m/s", v.get('velocity', 0) <= 3.0),
+        ("Water Cut", "< 40%", f"{v.get('water_cut', 0):.0f}%", v.get('water_cut', 0) < 40),
+    ]
+    t = doc.add_table(rows=1, cols=4)
+    t.style = "Light Grid Accent 1"
+    for i, h in enumerate(["Input", "Ideal Range", "Your Value", "Status"]):
+        t.rows[0].cells[i].text = h
+    for name, ideal, val, ok in ideal_rows:
+        cells = t.add_row().cells
+        cells[0].text = name
+        cells[1].text = ideal
+        cells[2].text = val
+        cells[3].text = status_icon(ok)
+
+    # ── 6. Is My Setup Correct? ──
+    doc.add_heading("6. Is My Setup Correct?", level=1)
+    inh, wall, overall = evaluate_inputs(v, rate, life_raw, 10.0)
+    doc.add_paragraph(f"{inh[0]} {inh[1]}")
+    doc.add_paragraph(f"{wall[0]} {wall[1]}")
+    doc.add_paragraph(f"{overall[0]} {overall[1]}")
+
+    # ── 7. Smart Recommendation ──
+    doc.add_heading("7. Smart Recommendation", level=1)
+    if well_name:
+        doc.add_paragraph(f"📍 Well / Stream: {well_name}")
+    rec = smart_recommendation(v, rate, life_raw, 10.0, v.get("pricepergallon", 3.0))
+    for icon, text in rec:
+        doc.add_paragraph(f"{icon} {text}")
+
+    # ── 8. Calculation Breakdown ──
+    doc.add_heading("8. Calculation Breakdown — Verify Every Step", level=1)
     for step_name, step_calc in steps.items():
         p = doc.add_paragraph()
         run = p.add_run(f"{step_name}: ")
         run.bold = True
         p.add_run(step_calc)
-    doc.add_heading("6. Sensitivity Analysis", level=1)
+    doc.add_paragraph("📍 This breakdown is for the specific well/plant entered.")
+
+    # ── 9. Engineering Explanation ──
+    doc.add_heading("9. Engineering Explanation", level=1)
+    doc.add_paragraph(ai_explanation(v, rate, life_raw, risk))
+
+    # ── 10. Sensitivity Analysis ──
+    doc.add_heading("10. Sensitivity Analysis", level=1)
     t = doc.add_table(rows=1, cols=len(sens_df.columns))
     t.style = "Light Grid Accent 1"
     for i, col in enumerate(sens_df.columns):
         t.rows[0].cells[i].text = str(col)
     for _, row in sens_df.iterrows():
         cells = t.add_row().cells
-        for i, val in enumerate(row):
-            cells[i].text = str(val)
-    doc.add_heading("7. Life Projection", level=1)
-    t = doc.add_table(rows=1, cols=len(proj_df.columns))
+        for i, col in enumerate(sens_df.columns):
+            cells[i].text = str(row[col])
+
+    # ── 11. Life Projection ──
+    doc.add_heading("11. Life Projection — Year by Year", level=1)
+    table_cols = [c for c in proj_df.columns if c.lower() != "color"]
+    t = doc.add_table(rows=1, cols=len(table_cols))
     t.style = "Light Grid Accent 1"
-    for i, col in enumerate(proj_df.columns):
+    for i, col in enumerate(table_cols):
         t.rows[0].cells[i].text = str(col)
     for _, row in proj_df.iterrows():
         cells = t.add_row().cells
-        for i, val in enumerate(row):
-        
-            cells[i].text = str(val)
-    doc.add_heading("8. Recommendations", level=1)
+        for i, col in enumerate(table_cols):
+            cells[i].text = str(row[col])
+
+    # ── 11b. Life Projection Chart ──
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import io as _io
+
+    year_col = next((c for c in proj_df.columns if "year" in c.lower()), proj_df.columns[0])
+    wall_col = next((c for c in proj_df.columns if "remaining" in c.lower() and "wall" in c.lower()),
+                    proj_df.columns[1] if len(proj_df.columns) > 1 else proj_df.columns[0])
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(proj_df[year_col], proj_df[wall_col],
+            marker="o", linewidth=2.5, color="#0b3d62", label="Remaining Wall")
+    ax.axhline(y=0, color="#e74c3c", linestyle="--", linewidth=2, label="Failure Limit")
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Remaining Wall")
+    ax.set_title("Pipeline Life Projection — Year by Year")
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    chart_buf = _io.BytesIO()
+    fig.savefig(chart_buf, format="png", bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    chart_buf.seek(0)
+
+    doc.add_heading("11b. Life Projection Chart", level=2)
+    doc.add_picture(chart_buf, width=Inches(6.0))
+
+    # ── 12. Recommendations ──
+    doc.add_heading("12. Recommendations", level=1)
     if life_raw > 40:
         doc.add_paragraph("Corrosion is NOT the limiting factor.")
     elif life_raw > 20:
         doc.add_paragraph("Maintain inhibitor program, verify CP annually.")
     else:
         doc.add_paragraph("URGENT: increase inhibitor, verify CP, consider alloy.")
+
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
     return buffer
-
+    
 # ══════════════════════════════════════════════════════════════════════════
 #  UI
 # ══════════════════════════════════════════════════════════════════════════
