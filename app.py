@@ -1137,46 +1137,43 @@ elif page == "🔮 Prediction":
                     model = joblib.load("corrosion_model.pkl")
                     cols = joblib.load("feature_cols.pkl")
                     ml_input = {
-                        "Fluid_Type": v["fluid"],
-                        "Material_Grade": v["material"],
-                        "Coating_Condition": v["coating_condition"],
-                        "CP_Status": v["cp_on"],
+                        "Fluid_Type": v.get("fluid", "Crude Oil"),
+                        "Material_Grade": v.get("material", "API 5L X52"),
+                        "Coating_Condition": v.get("coating_condition", "Good"),
+                        "CP_Status": v.get("cp_on", "Yes"),
                         "Pipe_Diameter_in": v.get("diameter", 6.0),
-                        "Wall_Thickness_mm": v["wt"],
-                        "Service_Years": v["service_years"],
-                        "Operating_Pressure_psi": v["pressure"],
-                        "Operating_Temperature_F": v["temp"],
-                        "CO2_percent": v["co2"],
-                        "H2S_ppm": v["h2s"],
-                        "pH": v["ph"],
-                        "Chlorides_mg_L": v["chlorides"],
-                        "Oil_Rate_bbl_d": v.get("oil_rate", 1000),
-                        "Water_Rate_bbl_d": v.get("water_rate", 500),
-                        "Gas_Rate_MMscfd": v.get("gas_rate", 5.0),
-                        "Gas_SG": v.get("gas_sg", 0.7),
-                        "Velocity_m_s": v["velocity"],
-                        "Water_Cut_percent": v["water_cut"],
-                        "Inhibitor_Type": v["itype"],
-                        "Inhibitor_Dose_ppm": v["dose"],
-                        "Inhibitor_Dose_qt_day": v["daily_qt"],
-                        "Residual_Inhibitor_ppm": v["residual_ppm"],
+                        "Wall_Thickness_mm": v.get("wt", 8.0),
+                        "Service_Years": v.get("serviceyears", 10.0),
+                        "Operating_Pressure_psi": v.get("pressure", 1000),
+                        "Operating_Temperature_F": v.get("temp", 150),
+                        "CO2_percent": v.get("co2", 2.0),
+                        "H2S_ppm": v.get("h2s", 100),
+                        "pH": v.get("ph", 6.5),
+                        "Chlorides_mg_L": v.get("chlorides", 10000),
+                        "Oil_Rate_bbl_d": v.get("oilrate", 1000),
+                        "Water_Rate_bbl_d": v.get("waterrate", 500),
+                        "Gas_Rate_MMscfd": v.get("gasrate", 5.0),
+                        "Gas_SG": v.get("gassg", 0.7),
+                        "Velocity_m_s": v.get("velocity", 2.0),
+                        "Water_Cut_percent": v.get("watercut", 50),
+                        "Inhibitor_Type": v.get("itype", "Film-Forming Amine"),
+                        "Inhibitor_Dose_ppm": v.get("dose", 0),
+                        "Inhibitor_Dose_qt_day": v.get("dailyqt", 0),
+                        "Residual_Inhibitor_ppm": v.get("residualppm", 0),
                         "Target_Remaining_Life_yr": 10.0,
                         "Fe_Count_mg_L": 50.0,
                     }
+
                     df_in = pd.DataFrame([ml_input])
-
-                    # Compute interaction features exactly as in training
                     df_in = add_features(df_in)
-
                     for c in cols:
                         if c not in df_in.columns:
                             df_in[c] = 0
-                    df_in = df_in[cols]                   
+                    df_in = df_in[cols]
 
-                    # Clip velocity to training range (model unreliable outside 0.5–6.0 m/s)
-                    df_in["Velocity_m_s"] = min(max(v["velocity"], 0.5), 6.0)
+                    df_in["Velocityms"] = min(max(v["velocity"], 0.5), 6.0)
+                    st.write(f"ML input velocity being used: {df_in['Velocityms'].iloc[0]:.3f} m/s")
 
-                    st.write(f"🔍 ML input velocity being used: {df_in['Velocity_m_s'].iloc[0]:.3f} m/s")                  
                     ml_rate_raw = float(model.predict(df_in)[0])
                     try:
                         calib = joblib.load("ml_calibration.pkl")
@@ -1185,11 +1182,12 @@ elif page == "🔮 Prediction":
                         ml_rate = ml_rate_raw
 
                     available_wall = get_available_wall(v)
-                    ml_life = min(available_wall / ml_rate if ml_rate > 0 else 999, life)                     
+                    ml_life = min(available_wall / ml_rate if ml_rate > 0 else 999, life)
+
                     st.success(f"🤖 **ML Cross-Check:** Remaining Life: {ml_life:.1f} yrs (conservatively bounded by physics)")
                     st.caption(
-                      f"🤖 ML rate estimate: {ml_rate:.3f} mm/yr | Physics (primary): {rate:.3f} mm/yr | "
-                      f"Remaining life: {ml_life:.1f} yrs (physics-bounded)"
+                        f"🤖 ML rate estimate: {ml_rate:.3f} mm/yr | Physics (primary): {rate:.3f} mm/yr | "
+                        f"Remaining life: {ml_life:.1f} yrs (physics-bounded)"
                     )
                 st.subheader("💊 Dose Optimizer — Daily & Continuous")
                 target_life = st.number_input("Target Remaining Life (years)", 1.0, 30.0, 10.0, 0.5,
@@ -1303,7 +1301,6 @@ Beyond ~40 ppm, more inhibitor gives no benefit and can disrupt the protective f
                 with col_table:
                     st.markdown("#### 📋 Ideal / Optimal Ranges")
 
-                    import pandas as pd
 
                     def status_icon(ok):
                         return "✅ OK" if ok else "⚠️ Review"
