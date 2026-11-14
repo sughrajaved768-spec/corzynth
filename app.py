@@ -23,6 +23,57 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from corzynth_features import add_features
+import json
+
+SAVED_INPUTS_FILE = "saved_inputs.json"
+
+
+def save_inputs(key_prefix, inputs):
+    all_inputs = {}
+
+    if os.path.exists(SAVED_INPUTS_FILE):
+        try:
+            with open(SAVED_INPUTS_FILE, "r") as f:
+                all_inputs = json.load(f)
+        except Exception:
+            all_inputs = {}
+
+    all_inputs[key_prefix] = inputs
+
+    with open(SAVED_INPUTS_FILE, "w") as f:
+        json.dump(all_inputs, f, indent=2)
+
+
+def load_inputs(key_prefix):
+    if os.path.exists(SAVED_INPUTS_FILE):
+        try:
+            with open(SAVED_INPUTS_FILE, "r") as f:
+                all_inputs = json.load(f)
+            return all_inputs.get(key_prefix, {})
+        except Exception:
+            return {}
+    return {}
+
+def smart_input(label, input_type="text", key=None, default="", options=None, **kwargs):
+    """
+    One function for all inputs.
+    Automatically keeps the value when the user changes tabs.
+    """
+    if key is None:
+        key = label.lower().replace(" ", "_").replace("/", "_").replace("(", "").replace(")", "")
+
+    if input_type == "text":
+        return st.text_input(label, value=st.session_state.get(key, default), key=key, **kwargs)
+
+    if input_type == "number":
+        return st.number_input(label, value=st.session_state.get(key, default), key=key, **kwargs)
+
+    if input_type == "select":
+        return st.selectbox(label, options, index=options.index(st.session_state.get(key, default)) if st.session_state.get(key, default) in options else 0, key=key, **kwargs)
+
+    if input_type == "checkbox":
+        return st.checkbox(label, value=st.session_state.get(key, default), key=key, **kwargs)
+
 
 st.set_page_config(page_title="Corzynth", page_icon="corzynth_logo.jpeg", layout="wide")
 
@@ -729,56 +780,18 @@ def calculate_velocity(flow_fluid, flow_rate, pipe_dia_in, line_psi, temp_f,
         slip_info["liq_vel"] = round(velocity, 3)
         slip_info["holdup"] = 1.0
 
-
     return velocity, slip_info
-
-# ══════════════════════════════════════════════════════════════════════════
-#  SAVE DATA
-# ══════════════════════════════════════════════════════════════════════════
-
-def save_result_csv(v, rate, life_raw, risk, filename="corzynth_results.csv"):
-    row = {
-        "Saved At": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "Well / Stream Name": v.get("well_name", ""),
-        "Fluid": v.get("fluid", ""),
-        "Pressure (psi)": v.get("pressure", ""),
-        "Temperature (F)": v.get("temp", ""),
-        "Wall Thickness (mm)": v.get("wt", ""),
-        "Material": v.get("material", ""),
-        "Coating": v.get("coating_condition", ""),
-        "CP": v.get("cp_on", ""),
-        "CO2 (%)": v.get("co2", ""),
-        "H2S (ppm)": v.get("h2s", ""),
-        "pH": v.get("ph", ""),
-        "Chlorides (mg/L)": v.get("chlorides", ""),
-        "Inhibitor Type": v.get("itype", ""),
-        "Inhibitor (quarts/day)": v.get("daily_qt", ""),
-        "Dose (ppm)": round(v.get("dose", 0), 1),
-        "Residual Inhibitor (quarts)": v.get("residual_qt", ""),
-        "Residual (ppm)": round(v.get("residual_ppm", 0), 1),
-        "Velocity (m/s)": round(v.get("velocity", 0), 3),
-        "Water Cut (%)": v.get("water_cut", ""),
-        "Corrosion Rate (mm/yr)": round(rate, 4),
-        "Remaining Life (yrs)": round(min(life_raw, DESIGN_LIFE), 1),
-        "Risk": risk,
-    }
-    df_new = pd.DataFrame([row])
-    if os.path.exists(filename):
-        df_new.to_csv(filename, mode="a", header=False, index=False)
-    else:
-        df_new.to_csv(filename, index=False)
-    return filename
-# ══════════════════════════════════════════════════════════════════════════
-#  WORD REPORT
-# ══════════════════════════════════════════════════════════════════════════
+ 
 def make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
                      sens_df, opt_dose, opt_qt_day, risk):
     from docx import Document
     from docx.shared import Inches
     from io import BytesIO
+
     doc = Document()
     well_name = v.get("well_name", "").strip()
     title_suffix = f" — {well_name}" if well_name else ""
+
     doc.add_heading(f"Corzynth — Complete Corrosion Integrity Report{title_suffix}", 0)
     doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     doc.add_paragraph("📍 Scope: SPECIFIC well/plant only.")
@@ -791,7 +804,7 @@ def make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
         ("Pressure (psi)", v.get("pressure", "")),
         ("Temperature (°F)", v.get("temp", "")),
         ("Wall Thickness (mm)", v.get("wt", "")),
-        ("Minimum Required Wall (mm)", v.get("minrequiredwall", "")),
+        ("Minimum Required Wall (mm)", v.get("min_required_wall", "")),
         ("Material Grade", v.get("material", "")),
         ("Coating Condition", v.get("coating_condition", "")),
         ("Cathodic Protection", v.get("cp_on", "")),
@@ -820,7 +833,7 @@ def make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
     doc.add_heading("2. Integrity Assessment Results", level=1)
     doc.add_paragraph(f"Corrosion Rate: {rate:.3f} mm/yr")
     doc.add_paragraph(f"Remaining Life: {life_raw:.1f} years")
-    doc.add_paragraph(f"Service Years: {v.get('serviceyears', '')} yr")
+    doc.add_paragraph(f"Service Years: {v.get('service_years', '')} yr")
     doc.add_paragraph(f"Risk Level: {risk}")
     if v.get("h2s", 0) >= 500:
         doc.add_paragraph("⚠️ NACE MR0175 Sour Service: H2S >= 500 ppm")
@@ -982,7 +995,7 @@ def make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
     doc.save(buffer)
     buffer.seek(0)
     return buffer
-    
+
 # ══════════════════════════════════════════════════════════════════════════
 #  UI
 # ══════════════════════════════════════════════════════════════════════════
@@ -1131,6 +1144,7 @@ elif page == "🔮 Prediction":
     def render_line_tab(tab_obj, tab_name, d, key_prefix):
         with tab_obj:
             st.subheader(f"{tab_name} — Corrosion Prediction")
+            saved = load_inputs(key_prefix)
 
             # ── Flow Calculator: Velocity & Water Cut (AUTO — no button) ──
             st.markdown("**⚙️ Flow Calculator — Velocity & Water Cut (Auto-Calculated)**")
@@ -1170,10 +1184,9 @@ elif page == "🔮 Prediction":
                 s3.metric("Liquid Holdup", f"{slip_info.get('holdup', 0):.1%}")
                 s4.metric("Slip Ratio", f"{slip_info.get('slip_ratio', 1.0):.2f}×")
              # Sync Flow Calculator values into Operating Conditions
-            st.session_state[f"{key_prefix}_t"] = float(fc_temp)
-            st.session_state[f"{key_prefix}_p"] = float(line_p)
-            st.session_state[f"{key_prefix}_vel"] = float(round(auto_velocity, 3))
-
+            st.session_state.setdefault(f"{key_prefix}_t", float(fc_temp))
+            st.session_state.setdefault(f"{key_prefix}_p", float(line_p))
+            st.session_state.setdefault(f"{key_prefix}_vel", float(round(auto_velocity, 3)))
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("**🔧 Operating Conditions**")
