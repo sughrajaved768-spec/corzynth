@@ -1115,7 +1115,7 @@ if page == "🏠 Home":
 # ══════════════════════════════════════════════════════════════════════════
 #  PREDICTION
 # ══════════════════════════════════════════════════════════════════════════
-    
+   
 elif page == "🔮 Prediction":
         render_header()
         st.info("🔬 **Transparent Physics-Based Engineering** — every calculation step is shown.")
@@ -1142,10 +1142,47 @@ elif page == "🔮 Prediction":
                       "service_years": 10.0},
         }
 
+        def save_result_csv(v, rate, life_raw, risk, filename="corzynth_results.csv"):
+            row = {
+                "Saved At": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Well / Stream Name": v.get("well_name", ""),
+                "Fluid": v.get("fluid", ""),
+                "Pressure (psi)": v.get("pressure", 0),
+                "Temperature (F)": v.get("temp", 0),
+                "Wall Thickness (mm)": v.get("wt", 0),
+                "Material": v.get("material", ""),
+                "Coating": v.get("coating_condition", ""),
+                "CP": v.get("cp_on", ""),
+                "CO2 (%)": v.get("co2", 0),
+                "H2S (ppm)": v.get("h2s", 0),
+                "pH": v.get("ph", 0),
+                "Chlorides (mg/L)": v.get("chlorides", 0),
+                "Inhibitor Type": v.get("itype", ""),
+                "Inhibitor (quarts/day)": v.get("daily_qt", 0),
+                "Dose (ppm)": v.get("dose", 0),
+                "Residual Inhibitor (quarts)": v.get("residual_qt", 0),
+                "Residual (ppm)": v.get("residual_ppm", 0),
+                "Velocity (m/s)": v.get("velocity", 0),
+                "Water Cut (%)": v.get("water_cut", 0),
+                "Corrosion Rate (mm/yr)": round(rate, 4),
+                "Remaining Life (yrs)": round(min(life_raw, DESIGN_LIFE), 1),
+                "Risk": risk,
+            }
+
+            df_new = pd.DataFrame([row])
+
+            if os.path.exists(filename):
+                df_new.to_csv(filename, mode="a", header=False, index=False)
+            else:
+                df_new.to_csv(filename, index=False)
+
+            return filename
+
         def render_line_tab(tab_obj, tab_name, d, key_prefix):
             with tab_obj:
                 st.subheader(f"{tab_name} — Corrosion Prediction")
                 saved = load_inputs(key_prefix)
+
                 # ── Flow Calculator: Velocity & Water Cut (AUTO — no button) ──
                 st.markdown("**⚙️ Flow Calculator — Velocity & Water Cut (Auto-Calculated)**")
 
@@ -1256,9 +1293,7 @@ elif page == "🔮 Prediction":
                 st.session_state[f"{key_prefix}_vel"] = float(round(auto_velocity, 3))
 
                 c1, c2 = st.columns(2)
-                def sync_operating_conditions():
-                    st.session_state[f"{key_prefix}_t"] = fc_temp
-                    st.session_state[f"{key_prefix}_p"] = line_p
+
                 with c1:
                     st.markdown("**🔧 Operating Conditions**")
 
@@ -1981,12 +2016,12 @@ Beyond ~40 ppm, more inhibitor gives no benefit and can disrupt the protective f
                     ):
                         saved_file = save_result_csv(v, rate, life_raw, risk)
                         st.success(f"✅ Saved to {saved_file}")
-
+                   
         render_line_tab(tab_oil, "Oil Line", LINE_DEFAULTS["oil"], "oil")
         render_line_tab(tab_water, "Water Line", LINE_DEFAULTS["water"], "water")
         render_line_tab(tab_gas, "Natural Gas Line", LINE_DEFAULTS["gas"], "gas")
         render_line_tab(tab_multi, "Multiphase Line", LINE_DEFAULTS["multi"], "multi")
-        
+
 elif page == "🧪 Chemical Advisor":
         render_header()
         st.header("🧪 Chemical Advisor — Smart Buyer's Guide")
