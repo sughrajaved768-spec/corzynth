@@ -24,6 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from corzynth_features import add_features
 import json
+import csv, re
  
 SAVED_INPUTS_FILE = "saved_inputs.json"
  
@@ -99,6 +100,215 @@ def save_result_csv(v, rate, life_raw, risk, filename=None):
         df_new.to_csv(filename, index=False, encoding="utf-8-sig")
  
     return filename
+ 
+ 
+# ── Well Data File Loader (CSV / Excel → Prediction inputs) ──
+# Reads the "Corzynth_Well_Data_Input" sheet saved as .csv (or the .xlsx itself)
+# and fills the Prediction-tab inputs for the chosen well. Headers are matched
+# by name, so column order does not matter.
+WELL_HEADER_MAP = [
+    ("startswith", "wellstreamname", "name"),
+    ("startswith", "fluid", "fluid"),
+    ("startswith", "pipediameter", "dia"),
+    ("startswith", "gasspecificgravity", "sg"),
+    ("startswith", "flowingtemperature", "ftemp"),
+    ("startswith", "linepressure", "lp"),
+    ("startswith", "oilrate", "oil"),
+    ("startswith", "waterrate", "water"),
+    ("startswith", "gasrate", "gas"),
+    ("startswith", "wallthickness", "wt"),
+    ("startswith", "minrequiredwall", "min_wall"),
+    ("startswith", "serviceyears", "svc"),
+    ("startswith", "materialgrade", "mat"),
+    ("startswith", "coatingcondition", "coat"),
+    ("startswith", "cathodicprotection", "cp"),
+    ("exact", "co2", "co2"),
+    ("exact", "co", "co2"),
+    ("exact", "h2s", "h2s"),
+    ("exact", "hs", "h2s"),
+    ("exact", "h2sppm", "h2s"),
+    ("exact", "hsppm", "h2s"),
+    ("exact", "ph", "ph"),
+    ("startswith", "chlorides", "cl"),
+    ("startswith", "inhibitortype", "itype"),
+    ("startswith", "inhibitordose", "dppm"),
+    ("startswith", "inhibitorquartsmmscfd", "dqt"),
+    ("startswith", "residualinhibitor", "rqt"),
+]
+ 
+# suffix: (label, min, max, kind) — limits match the number_input widgets
+WELL_NUM_SPEC = {
+    "dia": ("Pipe Diameter", 1.0, 60.0, "float"),
+    "sg": ("Gas Specific Gravity", 0.5, 2.0, "float"),
+    "ftemp": ("Flowing Temperature", 32.0, 400.0, "float"),
+    "lp": ("Line Pressure", 14.7, 5000.0, "float"),
+    "oil": ("Oil Rate", 0.0, 50000.0, "float"),
+    "water": ("Water Rate", 0.0, 50000.0, "float"),
+    "gas": ("Gas Rate", 0.0, 500.0, "float"),
+    "wt": ("Wall Thickness", 1.0, 50.0, "float"),
+    "min_wall": ("Min Required Wall", 0.1, 50.0, "float"),
+    "svc": ("Service Years", 0.0, 50.0, "float"),
+    "co2": ("CO2", 0.0, 100.0, "float"),
+    "h2s": ("H2S", 0, 20000, "int"),
+    "ph": ("pH", 3.0, 10.0, "float"),
+    "cl": ("Chlorides", 0, 200000, "int"),
+    "dppm": ("Inhibitor Dose (ppm)", 0.0, 150.0, "float"),
+    "dqt": ("Inhibitor (quarts/MMscfd)", 0.0, 10.0, "float"),
+    "rqt": ("Residual Inhibitor (quarts/day)", 0.0, 500.0, "float"),
+}
+ 
+ 
+def _well_norm(x):
+    first = (str(x).splitlines() or [""])[0]
+    return re.sub(r"[^a-z0-9]", "", first.lower())
+ 
+ 
+def read_well_file(uploaded):
+    """Read an uploaded .csv / .xlsx well-data sheet → list of well dicts."""
+    name = uploaded.name.lower()
+    data = uploaded.getvalue()
+ 
+    if name.endswith((".xlsx", ".xlsm", ".xls")):
+        xl = pd.ExcelFile(io.BytesIO(data))
+        sheet = "Well Data" if "Well Data" in xl.sheet_names else xl.sheet_names[0]
+        raw = xl.parse(sheet, header=None, dtype=object).fillna("")
+        rows = [[str(c).strip() for c in r] for r in raw.values.tolist()]
+    else:
+        text = None
+        for enc in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                text = data.decode(enc)
+                break
+            except Exception:
+                continue
+        delim = ";" if text.count(";") > text.count(",") else ","
+        rows = [[c.strip() for c in r]
+                for r in csv.reader(io.StringIO(text), delimiter=delim)]
+        if delim == ";":
+            rows = [[re.sub(r"^(-?\d+),(\d+)$", r"\1.\2", c) for c in r] for r in rows]
+ 
+    hdr_idx = None
+    for i, r in enumerate(rows):
+        if any(_well_norm(c).startswith("wellstreamname") for c in r):
+            hdr_idx = i
+            break
+    if hdr_idx is None:
+        return []
+ 
+    colmap = {}
+    for j, h in enumerate(rows[hdr_idx]):
+        n = _well_norm(h)
+        for mode, pat, suffix in WELL_HEADER_MAP:
+            if (mode == "exact" and n == pat) or (mode == "startswith" and n.startswith(pat)):
+                if suffix not in colmap:
+                    colmap[suffix] = j
+                break
+ 
+    wells = []
+    for r in rows[hdr_idx + 1:]:
+        rec = {}
+        for suffix, j in colmap.items():
+            if j < len(r) and r[j] != "":
+                rec[suffix] = r[j]
+        if not any(k != "name" for k in rec):
+            continue
+        wells.append(rec)
+    return wells
+ 
+ 
+def well_line_type(fluid_text):
+    """Which Prediction tab a well belongs to (None = unknown → shown in all)."""
+    f = re.sub(r"[^a-z]", "", str(fluid_text).lower())
+    if not f:
+        return None
+    if "multi" in f:
+        return "multi"
+    if "gas" in f:
+        return "gas"
+    if "water" in f:
+        return "water"
+    if "oil" in f or "crude" in f:
+        return "oil"
+    return None
+ 
+ 
+def _well_float(x):
+    try:
+        return float(str(x).replace(",", "").strip())
+    except Exception:
+        return None
+ 
+ 
+def _well_pick(options, text):
+    t = re.sub(r"\s+", "", str(text).lower())
+    for o in options:
+        if re.sub(r"\s+", "", o.lower()) == t:
+            return o
+    return None
+ 
+ 
+def apply_well_to_inputs(key_prefix, rec, d):
+    """Callback: write one well's values into the Prediction-tab widgets."""
+    ss = st.session_state
+    notes = []
+    vals = {}
+ 
+    for k, (label, lo, hi, kind) in WELL_NUM_SPEC.items():
+        if k == "dppm" and key_prefix == "gas":
+            continue
+        if k == "dqt" and key_prefix != "gas":
+            continue
+        if k not in rec:
+            continue
+        x = _well_float(rec[k])
+        if x is None:
+            notes.append(f"{label}: “{rec[k]}” is not a number — skipped.")
+            continue
+        c = min(max(x, lo), hi)
+        if c != x:
+            notes.append(f"{label}: {x:g} is outside the allowed range — set to {c:g}.")
+        vals[k] = int(round(c)) if kind == "int" else float(c)
+ 
+    # Residual blank → default to the daily dose (same as the app's default)
+    if "rqt" not in vals:
+        water = vals.get("water", ss.get(f"{key_prefix}_water", d["water_bbl"]))
+        if key_prefix == "gas":
+            dqt = vals.get("dqt", ss.get(f"{key_prefix}_dqt", d["dose_qt_mmscfd"]))
+            gasr = vals.get("gas", ss.get(f"{key_prefix}_gas", d["gas_mmscfd"]))
+            qt = dqt * gasr
+        else:
+            dppm = vals.get("dppm", ss.get(f"{key_prefix}_dppm", d["dose_ppm"]))
+            qt = ppm_to_qt_day(dppm, water)
+        vals["rqt"] = round(min(max(qt, 0.0), 500.0), 2)
+        notes.append("Residual Inhibitor (quarts/day) was blank — set equal to the daily dose.")
+ 
+    for k, val in vals.items():
+        ss[f"{key_prefix}_{k}"] = val
+ 
+    if rec.get("name"):
+        ss[f"{key_prefix}_wellname"] = rec["name"]
+ 
+    for suffix, options, label in (("mat", MATERIAL_GRADES, "Material Grade"),
+                                   ("coat", COATING_CONDITIONS, "Coating Condition"),
+                                   ("itype", INHIBITOR_TYPES, "Inhibitor Type")):
+        if suffix in rec:
+            hit = _well_pick(options, rec[suffix])
+            if hit:
+                ss[f"{key_prefix}_{suffix}"] = hit
+            else:
+                notes.append(f"{label}: “{rec[suffix]}” not recognised — left unchanged.")
+ 
+    if "cp" in rec:
+        t = str(rec["cp"]).strip().lower()
+        if t in ("yes", "y", "true", "1"):
+            ss[f"{key_prefix}_cp"] = "Yes"
+        elif t in ("no", "n", "false", "0"):
+            ss[f"{key_prefix}_cp"] = "No"
+        else:
+            notes.append(f"Cathodic Protection: “{rec['cp']}” not recognised — left unchanged.")
+ 
+    ss[f"{key_prefix}_loadmsg"] = (rec.get("name") or "well", notes)
+# ── End Well Data File Loader ──
  
  
 def smart_input(label, input_type="text", key=None, default="", options=None, **kwargs):
@@ -1172,6 +1382,24 @@ elif page == "🔮 Prediction":
                 "the pipe. With 20+ ppm residual, expect 10-12+ years remaining life "
                 "(field-calibrated, 96.11% average dosing efficiency).")
  
+        well_records = []
+        with st.expander("📂 Load Well Data from CSV / Excel File (optional)", expanded=False):
+            st.caption("Upload the filled Corzynth Well Data sheet (saved as .csv, or the .xlsx itself). "
+                       "Then open a line tab, pick a well, and click **Load Into Inputs**. "
+                       "Corrosion rate, life and risk are still calculated by the app.")
+            well_file = st.file_uploader("Upload well data file (.csv or .xlsx)",
+                                         type=["csv", "xlsx"], key="well_file_upl")
+            if well_file is not None:
+                try:
+                    well_records = read_well_file(well_file)
+                    if well_records:
+                        st.success(f"✅ {len(well_records)} well(s) found in the file.")
+                    else:
+                        st.warning("No well rows found. Check that the header row contains "
+                                   "“Well / Stream Name” and that the rows below it are filled.")
+                except Exception as e:
+                    st.error(f"❌ Could not read the file: {e}")
+ 
         tab_oil, tab_water, tab_gas, tab_multi = st.tabs(
             ["🛢️ Oil Line", "💧 Water Line", "⛽ Natural Gas Line", "🫧 Multiphase Line"])
  
@@ -1193,6 +1421,31 @@ elif page == "🔮 Prediction":
         def render_line_tab(tab_obj, tab_name, d, key_prefix):
             with tab_obj:
                 st.subheader(f"{tab_name} — Corrosion Prediction")
+ 
+                # ── Load a well from the uploaded CSV / Excel file ──
+                tab_wells = [w for w in well_records
+                             if well_line_type(w.get("fluid", "")) in (None, key_prefix)]
+                if tab_wells:
+                    lw1, lw2 = st.columns([3, 1])
+                    pick = lw1.selectbox(
+                        "📂 Load well from uploaded file",
+                        list(range(len(tab_wells))),
+                        format_func=lambda i: tab_wells[i].get("name") or f"Row {i + 1}",
+                        key=f"{key_prefix}_wellpick"
+                    )
+                    lw2.button(
+                        "📥 Load Into Inputs",
+                        key=f"{key_prefix}_wellload",
+                        use_container_width=True,
+                        on_click=apply_well_to_inputs,
+                        args=(key_prefix, tab_wells[pick], d)
+                    )
+                    load_msg = st.session_state.pop(f"{key_prefix}_loadmsg", None)
+                    if load_msg:
+                        st.success(f"✅ Loaded “{load_msg[0]}” into the {tab_name} inputs — "
+                                   f"review them, then click Calculate.")
+                        for n in load_msg[1]:
+                            st.warning(n)
                 saved = load_inputs(key_prefix)
  
                 # ── Flow Calculator: Velocity & Water Cut (AUTO — no button) ──
