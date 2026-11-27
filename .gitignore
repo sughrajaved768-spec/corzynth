@@ -2,3 +2,4 @@ corzynth_results.csv
 .streamlit/secrets.toml
 __pycache__/
 fix.py
+corzynth_results*.csv
