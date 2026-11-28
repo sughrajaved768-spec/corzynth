@@ -24,7 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from corzynth_features import add_features
 import json
-import csv, re
+import csv, re, math, time, hashlib
  
 SAVED_INPUTS_FILE = "saved_inputs.json"
  
@@ -59,6 +59,10 @@ def load_inputs(key_prefix):
 def user_csv_file():
     u = st.session_state.get("username", "guest")
     safe = "".join(c for c in u if c.isalnum() or c in "-_") or "guest"
+    if safe != u:
+        # different usernames must never share a file (e.g. "a.b" vs "ab")
+        import hashlib
+        safe += "_" + hashlib.sha256(u.encode("utf-8")).hexdigest()[:8]
     return f"corzynth_results_{safe}.csv"
  
  
@@ -99,13 +103,22 @@ def save_result_csv(v, rate, life_raw, risk, filename=None):
     else:
         df_new.to_csv(filename, index=False, encoding="utf-8-sig")
  
+    audit_log("save_result", detail=f"{v.get('well_name', '')} -> {filename}")
     return filename
  
  
 # ── Well Data File Loader (CSV / Excel → Prediction inputs) ──
-# Reads the "Corzynth_Well_Data_Input" sheet saved as .csv (or the .xlsx itself)
-# and fills the Prediction-tab inputs for the chosen well. Headers are matched
-# by name, so column order does not matter.
+# Users download the CSV template (button on the Prediction page), fill one row
+# per well and upload it. Headers are matched by name, so column order does not
+# matter. Units are converted automatically using the Water Rate:
+#   • Dose given as ppm OR quarts/day OR quarts/MMscfd → the unit the line needs
+#   • Residual given as quarts/day OR ppm              → quarts/day (app input)
+# Security: files are read in memory only (never saved), size / row limits
+# apply, every value is range-checked, and text from the file is sanitised
+# before it is shown or saved.
+WELL_MAX_BYTES = 2 * 1024 * 1024
+WELL_MAX_ROWS = 500
+ 
 WELL_HEADER_MAP = [
     ("startswith", "wellstreamname", "name"),
     ("startswith", "fluid", "fluid"),
@@ -131,9 +144,12 @@ WELL_HEADER_MAP = [
     ("exact", "ph", "ph"),
     ("startswith", "chlorides", "cl"),
     ("startswith", "inhibitortype", "itype"),
-    ("startswith", "inhibitordose", "dppm"),
+    ("startswith", "inhibitordoseppm", "dppm"),
+    ("startswith", "inhibitordosequarts", "dqd"),
     ("startswith", "inhibitorquartsmmscfd", "dqt"),
-    ("startswith", "residualinhibitor", "rqt"),
+    ("startswith", "residualinhibitorppm", "rppm"),
+    ("startswith", "residualppm", "rppm"),
+    ("startswith", "residualinhibitorquarts", "rqt"),
 ]
  
 # suffix: (label, min, max, kind) — limits match the number_input widgets
@@ -153,9 +169,55 @@ WELL_NUM_SPEC = {
     "ph": ("pH", 3.0, 10.0, "float"),
     "cl": ("Chlorides", 0, 200000, "int"),
     "dppm": ("Inhibitor Dose (ppm)", 0.0, 150.0, "float"),
+    "dqd": ("Inhibitor Dose (quarts/day)", 0.0, 1e9, "float"),
     "dqt": ("Inhibitor (quarts/MMscfd)", 0.0, 10.0, "float"),
     "rqt": ("Residual Inhibitor (quarts/day)", 0.0, 500.0, "float"),
+    "rppm": ("Residual Inhibitor (ppm)", 0.0, 1e9, "float"),
 }
+# dose / residual fields are unit-converted, not copied straight into a widget
+WELL_DERIVED = {"dppm", "dqd", "dqt", "rqt", "rppm"}
+ 
+WELL_TEMPLATE_HEADERS = [
+    "Well / Stream Name", "Fluid", "Pipe Diameter (in)", "Gas Specific Gravity",
+    "Flowing Temperature (F)", "Line Pressure (psi)", "Oil Rate (bbl/d)",
+    "Water Rate (bbl/d)", "Gas Rate (MMscfd)", "Wall Thickness (mm)",
+    "Min Required Wall (mm)", "Service Years", "Material Grade",
+    "Coating Condition", "Cathodic Protection", "CO2 (%)", "H2S (ppm)", "pH",
+    "Chlorides (mg/L)", "Inhibitor Type", "Inhibitor Dose (ppm)",
+    "Inhibitor Dose (quarts/day)", "Inhibitor (quarts/MMscfd) - gas lines only",
+    "Residual Inhibitor (quarts/day)", "Residual Inhibitor (ppm)",
+]
+WELL_TEMPLATE_EXAMPLES = [
+    ["EXAMPLE Oil Well", "Crude Oil", 6, 0.65, 150, 1000, 2000, 500, 5, 8, 3, 10,
+     "API 5L X52", "Good", "Yes", 1.0, 10, 6.5, 15000, "Film-Forming Amine",
+     30, "", "", "", 30],
+    ["EXAMPLE Water Line", "Water", 6, 0.65, 140, 800, 0, 5000, 0, 8, 3, 10,
+     "API 5L X52", "Good", "Yes", 0.5, 5, 6.5, 15000, "Film-Forming Amine",
+     "", 33.6, "", 33.6, ""],
+    ["EXAMPLE Gas Line", "Natural Gas", 8, 0.70, 160, 1200, 200, 100, 15, 9, 3.5, 5,
+     "API 5L X60", "Fair", "No", 3.5, 50, 6.0, 20000, "Imidazoline",
+     "", "", 1.5, "", 30],
+    ["EXAMPLE Multiphase Line", "Multiphase", 6, 0.65, 150, 1000, 3000, 1500, 8, 8, 3, 10,
+     "API 5L X52", "Good", "Yes", 2.5, 20, 6.5, 15000, "Film-Forming Amine",
+     30, "", "", 7.5, ""],
+]
+ 
+ 
+def well_template_csv():
+    """CSV template users can fill in and upload (plain ASCII, opens in Excel)."""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["# CORZYNTH WELL DATA TEMPLATE - one row per well. Do not rename or delete the header row."])
+    w.writerow(["# Dose: fill ONE of Inhibitor Dose (ppm) / Inhibitor Dose (quarts/day) / Inhibitor (quarts/MMscfd - gas lines). "
+                "Residual: fill ONE of Residual Inhibitor (quarts/day) / Residual Inhibitor (ppm). "
+                "Corzynth converts the units automatically using the Water Rate."])
+    w.writerow(["# Use plain numbers only (no units, no formulas). Delete the EXAMPLE rows before uploading your own wells."])
+    w.writerow(["# Fluid: Crude Oil / Natural Gas / Water / Multiphase. Material Grade, Coating Condition and Inhibitor Type "
+                "must match the app lists. Cathodic Protection: Yes or No."])
+    w.writerow(WELL_TEMPLATE_HEADERS)
+    for row in WELL_TEMPLATE_EXAMPLES:
+        w.writerow(row)
+    return buf.getvalue().encode("utf-8")
  
  
 def _well_norm(x):
@@ -163,17 +225,34 @@ def _well_norm(x):
     return re.sub(r"[^a-z0-9]", "", first.lower())
  
  
+def _well_clean_cell(c):
+    """Remove control characters and cap the length of every cell."""
+    c = re.sub(r"[\x00-\x09\x0b-\x1f\x7f]", " ", str(c))
+    return c.strip()[:200]
+ 
+ 
+def _well_safe_text(x, n=60):
+    """Text that came from a file: keep letters, digits and basic punctuation only,
+    and never start with a spreadsheet-formula character."""
+    t = re.sub(r"[^\w\s\-./()#&,:']", "", str(x))
+    t = re.sub(r"\s+", " ", t).strip().lstrip("- ")
+    return t[:n]
+ 
+ 
 def read_well_file(uploaded):
     """Read an uploaded .csv / .xlsx well-data sheet → list of well dicts."""
     name = uploaded.name.lower()
     data = uploaded.getvalue()
+    if len(data) > WELL_MAX_BYTES:
+        raise ValueError("The file is larger than 2 MB. Please upload a smaller file.")
  
-    if name.endswith((".xlsx", ".xlsm", ".xls")):
+    if name.endswith(".xlsx"):
         xl = pd.ExcelFile(io.BytesIO(data))
         sheet = "Well Data" if "Well Data" in xl.sheet_names else xl.sheet_names[0]
-        raw = xl.parse(sheet, header=None, dtype=object).fillna("")
-        rows = [[str(c).strip() for c in r] for r in raw.values.tolist()]
-    else:
+        raw = xl.parse(sheet, header=None, dtype=object,
+                       nrows=WELL_MAX_ROWS + 20).fillna("")
+        rows = [[_well_clean_cell(c) for c in r] for r in raw.values.tolist()]
+    elif name.endswith(".csv"):
         text = None
         for enc in ("utf-8-sig", "cp1252", "latin-1"):
             try:
@@ -182,10 +261,12 @@ def read_well_file(uploaded):
             except Exception:
                 continue
         delim = ";" if text.count(";") > text.count(",") else ","
-        rows = [[c.strip() for c in r]
+        rows = [[_well_clean_cell(c) for c in r]
                 for r in csv.reader(io.StringIO(text), delimiter=delim)]
         if delim == ";":
             rows = [[re.sub(r"^(-?\d+),(\d+)$", r"\1.\2", c) for c in r] for r in rows]
+    else:
+        raise ValueError("Only .csv or .xlsx files are accepted.")
  
     hdr_idx = None
     for i, r in enumerate(rows):
@@ -210,9 +291,18 @@ def read_well_file(uploaded):
         for suffix, j in colmap.items():
             if j < len(r) and r[j] != "":
                 rec[suffix] = r[j]
+        if "name" in rec:
+            safe_name = _well_safe_text(rec["name"], 60)
+            if safe_name:
+                rec["name"] = safe_name
+            else:
+                del rec["name"]
         if not any(k != "name" for k in rec):
             continue
         wells.append(rec)
+ 
+    if len(wells) > WELL_MAX_ROWS:
+        raise ValueError(f"More than {WELL_MAX_ROWS} wells in one file. Split it into smaller files.")
     return wells
  
  
@@ -234,9 +324,10 @@ def well_line_type(fluid_text):
  
 def _well_float(x):
     try:
-        return float(str(x).replace(",", "").strip())
+        v = float(str(x).replace(",", "").strip())
     except Exception:
         return None
+    return v if math.isfinite(v) else None
  
  
 def _well_pick(options, text):
@@ -248,39 +339,103 @@ def _well_pick(options, text):
  
  
 def apply_well_to_inputs(key_prefix, rec, d):
-    """Callback: write one well's values into the Prediction-tab widgets."""
+    """Callback: write one well's values into the Prediction-tab widgets,
+    converting dose / residual units automatically."""
     ss = st.session_state
-    notes = []
-    vals = {}
+    warns, infos, vals = [], [], {}
  
-    for k, (label, lo, hi, kind) in WELL_NUM_SPEC.items():
-        if k == "dppm" and key_prefix == "gas":
-            continue
-        if k == "dqt" and key_prefix != "gas":
-            continue
+    def _clamp(label, x, lo, hi):
+        c = min(max(x, lo), hi)
+        if c != x:
+            warns.append(f"{label}: {x:g} is outside the allowed range ({lo:g} to {hi:g}) — set to {c:g}.")
+        return c
+ 
+    def _raw(k):
         if k not in rec:
+            return None
+        x = _well_float(rec[k])
+        if x is None:
+            warns.append(f"{WELL_NUM_SPEC[k][0]}: “{_well_safe_text(rec[k], 30)}” is not a valid number — skipped.")
+            return None
+        return max(x, 0.0)
+ 
+    # 1) plain numeric inputs
+    for k, (label, lo, hi, kind) in WELL_NUM_SPEC.items():
+        if k in WELL_DERIVED or k not in rec:
             continue
         x = _well_float(rec[k])
         if x is None:
-            notes.append(f"{label}: “{rec[k]}” is not a number — skipped.")
+            warns.append(f"{label}: “{_well_safe_text(rec[k], 30)}” is not a valid number — skipped.")
             continue
-        c = min(max(x, lo), hi)
-        if c != x:
-            notes.append(f"{label}: {x:g} is outside the allowed range — set to {c:g}.")
+        c = _clamp(label, x, lo, hi)
         vals[k] = int(round(c)) if kind == "int" else float(c)
  
-    # Residual blank → default to the daily dose (same as the app's default)
-    if "rqt" not in vals:
-        water = vals.get("water", ss.get(f"{key_prefix}_water", d["water_bbl"]))
-        if key_prefix == "gas":
-            dqt = vals.get("dqt", ss.get(f"{key_prefix}_dqt", d["dose_qt_mmscfd"]))
-            gasr = vals.get("gas", ss.get(f"{key_prefix}_gas", d["gas_mmscfd"]))
-            qt = dqt * gasr
+    water = vals.get("water", ss.get(f"{key_prefix}_water", d["water_bbl"]))
+    gasr = vals.get("gas", ss.get(f"{key_prefix}_gas", d["gas_mmscfd"]))
+ 
+    # 2) inhibitor DOSE — accepts ppm, quarts/day or quarts/MMscfd
+    r_dppm, r_dqt, r_dqd = _raw("dppm"), _raw("dqt"), _raw("dqd")
+    daily_qt = None
+ 
+    if key_prefix == "gas":
+        dqt = None
+        if r_dqt is not None:
+            dqt = r_dqt
+        elif r_dqd is not None:
+            if gasr > 0:
+                dqt = r_dqd / gasr
+                infos.append(f"Dose {r_dqd:g} quarts/day → {dqt:.3f} quarts/MMscfd (gas rate {gasr:g} MMscfd).")
+            else:
+                warns.append("Gas Rate is 0 — the quarts/day dose cannot be converted; dose left unchanged.")
+        elif r_dppm is not None:
+            if gasr > 0 and water > 0:
+                dqt = ppm_to_qt_day(r_dppm, water) / gasr
+                infos.append(f"Dose {r_dppm:g} ppm → {dqt:.3f} quarts/MMscfd "
+                             f"(water {water:g} bbl/d, gas {gasr:g} MMscfd).")
+            else:
+                warns.append("Water or Gas Rate is 0 — the ppm dose cannot be converted; dose left unchanged.")
+        if dqt is not None:
+            vals["dqt"] = round(_clamp("Inhibitor (quarts/MMscfd)", dqt, 0.0, 10.0), 3)
+        dqt_now = vals.get("dqt", ss.get(f"{key_prefix}_dqt", d["dose_qt_mmscfd"]))
+        daily_qt = dqt_now * gasr
+    else:
+        dppm = None
+        if r_dppm is not None:
+            dppm = r_dppm
+        elif r_dqd is not None:
+            if water > 0:
+                dppm = qt_day_to_ppm(r_dqd, water)
+                infos.append(f"Dose {r_dqd:g} quarts/day → {dppm:.1f} ppm (water {water:g} bbl/d).")
+            else:
+                warns.append("Water Rate is 0 — the quarts/day dose cannot be converted; dose left unchanged.")
+        elif r_dqt is not None:
+            if water > 0:
+                dppm = qt_day_to_ppm(r_dqt * gasr, water)
+                infos.append(f"Dose {r_dqt:g} quarts/MMscfd × {gasr:g} MMscfd → {dppm:.1f} ppm (water {water:g} bbl/d).")
+            else:
+                warns.append("Water Rate is 0 — the dose cannot be converted; dose left unchanged.")
+        if dppm is not None:
+            vals["dppm"] = round(_clamp("Inhibitor Dose (ppm)", dppm, 0.0, 150.0), 1)
+        dppm_now = vals.get("dppm", ss.get(f"{key_prefix}_dppm", d["dose_ppm"]))
+        daily_qt = ppm_to_qt_day(dppm_now, water)
+ 
+    # 3) RESIDUAL — accepts quarts/day or ppm; the app input is quarts/day
+    r_rqt, r_rppm = _raw("rqt"), _raw("rppm")
+    rqt = None
+    if r_rqt is not None:
+        rqt = r_rqt
+        if r_rppm is not None:
+            infos.append("Both residual quarts/day and residual ppm were given — quarts/day was used.")
+    elif r_rppm is not None:
+        if water > 0:
+            rqt = r_rppm * water * 159 / 0.946e6
+            infos.append(f"Residual {r_rppm:g} ppm → {rqt:.2f} quarts/day (water {water:g} bbl/d).")
         else:
-            dppm = vals.get("dppm", ss.get(f"{key_prefix}_dppm", d["dose_ppm"]))
-            qt = ppm_to_qt_day(dppm, water)
-        vals["rqt"] = round(min(max(qt, 0.0), 500.0), 2)
-        notes.append("Residual Inhibitor (quarts/day) was blank — set equal to the daily dose.")
+            warns.append("Water Rate is 0 — the residual ppm cannot be converted; residual set equal to the daily dose.")
+    if rqt is None:
+        rqt = daily_qt
+        infos.append("No residual given — residual set equal to the daily dose.")
+    vals["rqt"] = round(_clamp("Residual Inhibitor (quarts/day)", rqt, 0.0, 500.0), 4)
  
     for k, val in vals.items():
         ss[f"{key_prefix}_{k}"] = val
@@ -296,7 +451,7 @@ def apply_well_to_inputs(key_prefix, rec, d):
             if hit:
                 ss[f"{key_prefix}_{suffix}"] = hit
             else:
-                notes.append(f"{label}: “{rec[suffix]}” not recognised — left unchanged.")
+                warns.append(f"{label}: “{_well_safe_text(rec[suffix], 30)}” not recognised — left unchanged.")
  
     if "cp" in rec:
         t = str(rec["cp"]).strip().lower()
@@ -305,10 +460,260 @@ def apply_well_to_inputs(key_prefix, rec, d):
         elif t in ("no", "n", "false", "0"):
             ss[f"{key_prefix}_cp"] = "No"
         else:
-            notes.append(f"Cathodic Protection: “{rec['cp']}” not recognised — left unchanged.")
+            warns.append(f"Cathodic Protection: “{_well_safe_text(rec['cp'], 30)}” not recognised — left unchanged.")
  
-    ss[f"{key_prefix}_loadmsg"] = (rec.get("name") or "well", notes)
+    audit_log("load_well", detail=f"{key_prefix} | {rec.get('name', '')}")
+    ss[f"{key_prefix}_loadmsg"] = (rec.get("name") or "well", warns, infos)
 # ── End Well Data File Loader ──
+ 
+ 
+# ══════════════════════════════════════════════════════════════════════════
+#  ADVANCED ANALYTICS & SECURITY ADD-ONS
+#  Additive only — the physics engine (full_calculation) is not modified.
+#   • Confidence range around the model result + chance of reaching target life
+#   • Measured wall loss from UT readings → actual rate, API 570-style interval
+#   • Pit / metal-loss defect assessment (modified B31G, 0.85dL)
+#   • Run ID + engine version for reproducible, auditable results
+#   • Login lock-out, audit log, sign-out
+#   • Word-report extension (original report function untouched)
+# ══════════════════════════════════════════════════════════════════════════
+ENGINE_VERSION = "10.16"
+AUDIT_FILE = "corzynth_audit_log.csv"
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_SECONDS = 300
+ 
+SMYS_MPA = {"API 5L X42": 289, "API 5L X52": 359, "API 5L X60": 414,
+            "API 5L X65": 448, "API 5L X70": 483, "Carbon Steel A106": 241}
+ 
+ 
+# ── Audit log ──────────────────────────────────────────────────────────────
+def audit_log(event, user=None, detail=""):
+    """Append one line to the audit log. Never raises, never logs passwords."""
+    try:
+        if user is None:
+            user = st.session_state.get("username", "anonymous")
+ 
+        def _clean(x, n):
+            t = re.sub(r"[^\w\s\-./()#&,:@']", "", str(x))
+            t = re.sub(r"\s+", " ", t).strip().lstrip("=+-@ ")
+            return t[:n]
+ 
+        row = [datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+               _clean(user, 64), _clean(event, 40), _clean(detail, 200)]
+        is_new = not os.path.exists(AUDIT_FILE)
+        with open(AUDIT_FILE, "a", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            if is_new:
+                w.writerow(["Time", "User", "Event", "Detail"])
+            w.writerow(row)
+    except Exception:
+        pass
+ 
+ 
+# ── Login lock-out (shared across sessions while the server is running) ───
+@st.cache_resource
+def _login_guard():
+    return {"fails": {}, "locked": {}}
+ 
+ 
+def _login_key(u):
+    return str(u).strip().lower()[:64]
+ 
+ 
+def login_locked(u):
+    """Seconds left on a lock-out (0 = not locked)."""
+    g = _login_guard()
+    k = _login_key(u)
+    until = g["locked"].get(k)
+    if not until:
+        return 0
+    remain = until - time.time()
+    if remain <= 0:
+        g["locked"].pop(k, None)
+        g["fails"].pop(k, None)
+        return 0
+    return remain
+ 
+ 
+def login_failed(u):
+    """Count a failed attempt; lock the name after LOGIN_MAX_FAILS."""
+    g = _login_guard()
+    k = _login_key(u)
+    if len(g["fails"]) > 5000:
+        g["fails"].clear()
+    g["fails"][k] = g["fails"].get(k, 0) + 1
+    if g["fails"][k] >= LOGIN_MAX_FAILS:
+        g["locked"][k] = time.time() + LOGIN_LOCK_SECONDS
+        g["fails"][k] = 0
+        return True
+    return False
+ 
+ 
+def login_ok(u):
+    g = _login_guard()
+    k = _login_key(u)
+    g["fails"].pop(k, None)
+    g["locked"].pop(k, None)
+ 
+ 
+# ── Reproducibility ────────────────────────────────────────────────────────
+def run_id(v):
+    s = json.dumps(v, sort_keys=True, default=str)
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:10].upper()
+ 
+ 
+# ── Confidence range (one simple, consistent band around the model result) ─
+def confidence_range(rate, avail_wall, target_life, sigma=0.25):
+    """Likely range around the model's corrosion rate.
+    The model's own scatter is treated as log-normal (sigma 0.25 → the 10–90%
+    band is about ×/÷ 1.38). Always centred on the model result."""
+    k = math.exp(1.2816 * sigma)
+    rate_lo, rate_hi = rate / k, rate * k
+ 
+    def _life(r):
+        return avail_wall / r if (r > 0 and avail_wall > 0) else 0.0
+ 
+    if avail_wall <= 0:
+        p_meet = 0.0
+    elif target_life <= 0:
+        p_meet = 1.0
+    else:
+        rate_needed = avail_wall / target_life
+        zz = math.log(rate_needed / rate) / sigma
+        p_meet = 0.5 * (1 + math.erf(zz / math.sqrt(2)))   # P(rate <= needed)
+    return {"rate_lo": rate_lo, "rate_hi": rate_hi, "rate": float(rate),
+            "life_exp": _life(rate), "life_best": _life(rate_lo),
+            "life_worst": _life(rate_hi), "p_meet": float(p_meet),
+            "target_life": float(target_life)}
+ 
+ 
+# ── Defect assessment — modified B31G (0.85 dL) ────────────────────────────
+def b31g_modified_failure_pressure(od_mm, t_mm, smys_mpa, depth_mm, length_mm):
+    """Predicted failure pressure (MPa) of a corrosion defect, modified B31G.
+    Returns (Pf_MPa, Folias_M, d_over_t)."""
+    if od_mm <= 0 or t_mm <= 0:
+        return 0.0, 1.0, 0.0
+    dt = depth_mm / t_mm
+    if dt >= 1.0:
+        return 0.0, 1.0, dt
+    z = length_mm ** 2 / (od_mm * t_mm)
+    if z <= 50:
+        M = math.sqrt(1 + 0.6275 * z - 0.003375 * z ** 2)
+    else:
+        M = 0.032 * z + 3.3
+    sigma_flow = smys_mpa + 69.0
+    pf_intact = 2 * t_mm * sigma_flow / od_mm
+    ratio = (1 - 0.85 * dt) / (1 - 0.85 * dt / M)
+    return max(pf_intact * ratio, 0.0), M, dt
+ 
+ 
+def b31g_projection(od_mm, t_mm, smys_mpa, d0_mm, length_mm, maop_psi,
+                    growth_mm_yr, required_margin, years=40.0, step=0.5):
+    """Year-by-year safety margin (Pf / MAOP) as the defect deepens."""
+    maop_mpa = maop_psi * 0.00689476
+    rows, limit_year = [], None
+    for i in range(int(years / step) + 1):
+        yr = i * step
+        depth = d0_mm + growth_mm_yr * yr
+        pf, M, dt = b31g_modified_failure_pressure(od_mm, t_mm, smys_mpa, depth, length_mm)
+        margin = pf / maop_mpa if maop_mpa > 0 else float("inf")
+        rows.append({"Year": yr, "Depth (mm)": round(depth, 2),
+                     "d/t (%)": round(dt * 100, 1), "Pf (psi)": round(pf / 0.00689476, 0),
+                     "Margin": round(margin, 2)})
+        if limit_year is None and (margin < required_margin or dt > 0.80):
+            limit_year = yr
+    return rows, limit_year
+ 
+ 
+# ── Word report extension ──────────────────────────────────────────────────
+def make_word_report_plus(proj_df, wt, rate, life_raw, v, steps, redose_df,
+                          sens_df, opt_dose, opt_qt_day, risk, extras=None):
+    """Original report + an 'Advanced Analytics' section.
+    make_word_report() itself is unchanged."""
+    from docx import Document
+    from io import BytesIO
+ 
+    base = make_word_report(proj_df, wt, rate, life_raw, v, steps, redose_df,
+                            sens_df, opt_dose, opt_qt_day, risk)
+    if not extras:
+        return base
+    base.seek(0)
+    doc = Document(base)
+ 
+    def _table(header, rows):
+        t = doc.add_table(rows=1, cols=len(header))
+        t.style = "Light Grid Accent 1"
+        for i, h in enumerate(header):
+            t.rows[0].cells[i].text = str(h)
+        for r in rows:
+            cells = t.add_row().cells
+            for i, c in enumerate(r):
+                cells[i].text = str(c)
+ 
+    doc.add_heading("13. Advanced Analytics — Confidence & Verification", level=1)
+    doc.add_paragraph(f"Engine version: {ENGINE_VERSION} | Run ID: {extras.get('run_id', '')} | "
+                      f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    doc.add_paragraph("Validation status: the physics model is a published CO2 correlation with "
+                      "engineering calibration factors. It has not been validated against this "
+                      "operator's field data unless the measured-data section below is filled in. "
+                      "Use as engineering decision-support, not as a substitute for professional judgment.")
+ 
+    conf = extras.get("conf")
+    if conf:
+        doc.add_heading("Confidence Range", level=2)
+        _table(["Measure", "Value"], [
+            ("Corrosion rate — likely range (mm/yr)",
+             f"{conf['rate_lo']:.3f} to {conf['rate_hi']:.3f} (model {conf['rate']:.3f})"),
+            ("Remaining life — likely range (yr)",
+             f"{conf['life_worst']:.1f} to {conf['life_best']:.1f} (expected {conf['life_exp']:.1f})"),
+            (f"Chance of reaching the {conf['target_life']:.0f}-year target",
+             f"{conf['p_meet'] * 100:.0f}%"),
+        ])
+        doc.add_paragraph("The range assumes the model itself is accurate to about ±38% (typical for "
+                          "CO2 corrosion correlations). Replace this assumption with measured UT data "
+                          "where available.")
+ 
+    ut = extras.get("ut")
+    if ut:
+        doc.add_heading("Measured Wall Loss (UT)", level=2)
+        _table(["Measure", "Value"], [
+            ("Earlier / latest thickness (mm)", f"{ut['t1']:.2f} / {ut['t2']:.2f}"),
+            ("Interval (years)", f"{ut['years']:.2f}"),
+            ("Measured corrosion rate (mm/yr)", f"{ut['rate_m']:.3f}"),
+            ("Model rate (mm/yr)", f"{ut['rate_model']:.3f}"),
+            ("Measured ÷ model", f"{ut['calib']:.2f}"),
+            ("Governing rate = max(model, measured) (mm/yr)", f"{ut['gov_rate']:.3f}"),
+            ("Remaining life at governing rate (yr)", f"{ut['life_gov']:.1f}"),
+            ("Suggested next inspection (API 570 style: half life, max 10 yr)", f"{ut['interval']:.1f} yr"),
+        ])
+ 
+    bg = extras.get("b31g")
+    if bg:
+        doc.add_heading("Defect Assessment (modified B31G)", level=2)
+        _table(["Measure", "Value"], [
+            ("OD / wall / SMYS", f"{bg['od']:.1f} mm / {bg['t']:.1f} mm / {bg['smys']:.0f} MPa"),
+            ("Defect depth / length", f"{bg['d0']:.2f} mm / {bg['length']:.0f} mm"),
+            ("Defect depth ÷ wall", f"{bg['dt0'] * 100:.1f}%"),
+            ("Predicted failure pressure (psi)", f"{bg['pf_psi']:.0f}"),
+            ("MAOP (psi)", f"{bg['maop']:.0f}"),
+            ("Safety margin (Pf ÷ MAOP) / required", f"{bg['margin0']:.2f} / {bg['required']:.2f}"),
+            ("Years until margin or d/t limit is reached",
+             "beyond 40 yr" if bg['limit_year'] is None else f"{bg['limit_year']:.1f}"),
+        ])
+        doc.add_paragraph("Modified B31G applies to corrosion metal loss in carbon / low-alloy line pipe "
+                          "(not cracking). Valid for defect depth up to 80% of wall.")
+ 
+    doc.add_heading("References", level=2)
+    for ref in ("de Waard & Milliams (1991), Carbonic acid corrosion of steel, Corrosion 31(5).",
+                "ASME B31G (modified, 0.85dL) — remaining strength of corroded pipe.",
+                "API 570 — piping inspection intervals; AMPP (NACE) MR0175 / ISO 15156 — sour service."):
+        doc.add_paragraph(ref, style="List Bullet")
+ 
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+# ── End Advanced Analytics & Security Add-ons ──
  
  
 def smart_input(label, input_type="text", key=None, default="", options=None, **kwargs):
@@ -628,12 +1033,21 @@ if not st.session_state.logged_in:
         u = st.text_input("Username")
         p = st.text_input("Password", type="password")
         if st.button("🔐 Sign In", type="primary", use_container_width=True):
-            if check_login(u, p):
+            wait_s = login_locked(u)
+            if wait_s > 0:
+                audit_log("login_locked", user=u)
+                st.error(f"🔒 Too many failed attempts. Try again in {int(wait_s // 60) + 1} minute(s).")
+            elif check_login(u, p):
+                login_ok(u)
+                audit_log("login_ok", user=u)
                 st.session_state.logged_in = True
                 st.session_state.username = u               
                 st.rerun()
             else:
-                st.error("❌ Invalid username or password")
+                locked_now = login_failed(u)
+                audit_log("login_failed", user=u)
+                st.error("🔒 Too many failed attempts. Try again in 5 minutes." if locked_now
+                         else "❌ Invalid username or password")
     st.stop()
  
 # ══════════════════════════════════════════════════════════════════════════
@@ -1288,10 +1702,18 @@ def render_header():
     </div>
     """, unsafe_allow_html=True)
  
-page = st.sidebar.radio("Navigate", [
+PAGES = [
     "🏠 Home", "🔮 Prediction", "🧪 Chemical Advisor", "💊 Dose Optimizer",
     "💰 ROI Calculator", "🌍 Geophysical", "🏛️ NACE Compliance",
-    "🗺️ GIS Map", "🔔 Alerts", "📊 Multi-Well Dashboard", "ℹ️ About"])
+    "🗺️ GIS Map", "🔔 Alerts", "📊 Multi-Well Dashboard", "ℹ️ About"]
+if st.session_state.get("username") == "admin":
+    PAGES.insert(len(PAGES) - 1, "🛡️ Audit Log")
+page = st.sidebar.radio("Navigate", PAGES)
+if st.sidebar.button("🚪 Sign Out", key="signout_btn"):
+    audit_log("logout")
+    st.session_state.logged_in = False
+    st.session_state.pop("username", None)
+    st.rerun()
  
 # ══════════════════════════════════════════════════════════════════════════
 #  HOME — USER GUIDE
@@ -1384,9 +1806,16 @@ elif page == "🔮 Prediction":
  
         well_records = []
         with st.expander("📂 Load Well Data from CSV / Excel File (optional)", expanded=False):
-            st.caption("Upload the filled Corzynth Well Data sheet (saved as .csv, or the .xlsx itself). "
-                       "Then open a line tab, pick a well, and click **Load Into Inputs**. "
-                       "Corrosion rate, life and risk are still calculated by the app.")
+            st.caption("1) Download the CSV template and fill one row per well — give the inhibitor dose as "
+                       "ppm **or** quarts/day, and the residual as quarts/day **or** ppm; Corzynth converts "
+                       "the units automatically using the water rate. 2) Upload the filled file. "
+                       "3) Open a line tab, pick a well and click **Load Into Inputs**. "
+                       "Corrosion rate, life and risk are still calculated by the app. "
+                       "🔒 Your file is read in memory only and is never stored. Limits: 2 MB, 500 wells.")
+            st.download_button("📄 Download CSV Template",
+                               data=well_template_csv(),
+                               file_name="Corzynth_Well_Data_Template.csv",
+                               mime="text/csv", key="well_tpl_dl")
             well_file = st.file_uploader("Upload well data file (.csv or .xlsx)",
                                          type=["csv", "xlsx"], key="well_file_upl")
             if well_file is not None:
@@ -1444,6 +1873,8 @@ elif page == "🔮 Prediction":
                     if load_msg:
                         st.success(f"✅ Loaded “{load_msg[0]}” into the {tab_name} inputs — "
                                    f"review them, then click Calculate.")
+                        for n in load_msg[2]:
+                            st.info(n)
                         for n in load_msg[1]:
                             st.warning(n)
                 saved = load_inputs(key_prefix)
@@ -1804,6 +2235,7 @@ elif page == "🔮 Prediction":
                     st.session_state[f"{key_prefix}_result"] = (
                         v, rate, life, life_raw, risk, emoji, steps
                     )
+                    audit_log("calculate", detail=f"{tab_name} | {well_name}")
  
                 if f"{key_prefix}_result" in st.session_state:
                     v, rate, life, life_raw, risk, emoji, steps = st.session_state[f"{key_prefix}_result"]
@@ -2253,14 +2685,211 @@ Beyond ~40 ppm, more inhibitor gives no benefit and can disrupt the protective f
  
                     st.dataframe(styled_table, use_container_width=True)
  
+                    # ═══ ADVANCED ANALYTICS (additive) — confidence, cross-check, field data, defects ═══
+                    import plotly.graph_objects as go
+                    from datetime import date, timedelta
+ 
+                    extras = {"run_id": run_id(v)}
+                    st.markdown("---")
+                    st.subheader("🧠 Advanced Analytics — Confidence, Cross-Check & Field Data")
+                    st.caption(f"Engine v{ENGINE_VERSION} | Run ID: **{extras['run_id']}** | "
+                               f"{datetime.now().strftime('%Y-%m-%d %H:%M')} — quote the Run ID to reproduce this result.")
+ 
+                    # 1) Confidence range
+                    st.markdown("#### 🎯 Confidence Range")
+                    conf = confidence_range(rate, get_available_wall(v), target_life)
+                    extras["conf"] = conf
+ 
+                    def _fmt_life(x):
+                        return f"≥ {DESIGN_LIFE}" if x > DESIGN_LIFE else f"{x:.1f}"
+ 
+                    cf1, cf2, cf3 = st.columns(3)
+                    cf1.metric("Corrosion rate — likely range",
+                               f"{conf['rate_lo']:.2f} – {conf['rate_hi']:.2f} mm/yr")
+                    cf2.metric("Remaining life — likely range",
+                               f"{_fmt_life(conf['life_worst'])} – {_fmt_life(conf['life_best'])} yrs")
+                    cf3.metric(f"Chance of reaching {target_life:.0f}-yr target",
+                               f"{conf['p_meet'] * 100:.0f}%")
+                    if conf["p_meet"] >= 0.90:
+                        st.success(f"✅ High confidence: about {conf['p_meet'] * 100:.0f}% chance the line "
+                                   f"reaches the {target_life:.0f}-year target.")
+                    elif conf["p_meet"] >= 0.50:
+                        st.warning(f"⚠️ Moderate confidence: about {conf['p_meet'] * 100:.0f}% chance the line "
+                                   f"reaches the {target_life:.0f}-year target.")
+                    else:
+                        st.error(f"🔴 Low confidence: only about {conf['p_meet'] * 100:.0f}% chance the line "
+                                 f"reaches the {target_life:.0f}-year target — improve protection or confirm "
+                                 f"with measured data.")
+                    st.caption("The range assumes the model is accurate to about ±38% (typical for CO₂ "
+                               "corrosion correlations). Enter UT readings below to check it against reality.")
+ 
+                    # 2) Measured wall loss (UT)
+                    with st.expander("📏 Field Data — Measured Wall Loss (UT readings → actual corrosion rate)", expanded=False):
+                        ut_on = st.checkbox("I have two UT thickness readings for this line", key=f"{key_prefix}_adv_ut_on")
+                        if ut_on:
+                            ut_c1, ut_c2 = st.columns(2)
+                            with ut_c1:
+                                ut_t1 = st.number_input("Earlier UT thickness (mm)", min_value=0.5, max_value=60.0,
+                                                        value=float(v["wt"]), step=0.1, key=f"{key_prefix}_adv_ut_t1")
+                                ut_d1 = st.date_input("Earlier reading date",
+                                                      value=date.today() - timedelta(days=3 * 365),
+                                                      key=f"{key_prefix}_adv_ut_d1")
+                            with ut_c2:
+                                ut_t2 = st.number_input("Latest UT thickness (mm)", min_value=0.5, max_value=60.0,
+                                                        value=float(v["wt"]), step=0.1, key=f"{key_prefix}_adv_ut_t2")
+                                ut_d2 = st.date_input("Latest reading date", value=date.today(),
+                                                      key=f"{key_prefix}_adv_ut_d2")
+                            ut_years = (ut_d2 - ut_d1).days / 365.25
+                            ut_loss = ut_t1 - ut_t2
+                            if ut_years <= 0:
+                                st.error("The latest reading date must be after the earlier reading date.")
+                            elif ut_loss < 0:
+                                st.warning("The latest reading is thicker than the earlier one — this is measurement scatter. "
+                                           "Use more readings or a longer interval.")
+                            else:
+                                rate_m = ut_loss / ut_years
+                                min_wall_ut = float(v.get("min_required_wall", 3.0))
+                                avail_ut = max(0.0, ut_t2 - min_wall_ut)
+                                gov_rate = max(rate, rate_m)
+                                life_gov = avail_ut / gov_rate if gov_rate > 0 else 0.0
+                                interval = min(life_gov / 2.0, 10.0)
+                                calib = rate_m / rate if rate > 0 else float("nan")
+ 
+                                m_a, m_b, m_c = st.columns(3)
+                                m_a.metric("Measured rate", f"{rate_m:.3f} mm/yr")
+                                m_b.metric("Model rate", f"{rate:.3f} mm/yr")
+                                m_c.metric("Measured ÷ model", f"{calib:.2f}")
+                                m_d, m_e = st.columns(2)
+                                m_d.metric("Life at governing rate", f"{life_gov:.1f} yrs",
+                                           "governing = the higher of model and measured")
+                                m_e.metric("Suggested next inspection", f"{interval:.1f} yrs",
+                                           "API 570 style: half the remaining life, max 10 yr")
+ 
+                                if ut_years < 1.0 or ut_loss < 0.3:
+                                    st.info("ℹ️ Short interval or small metal loss — UT scatter (about ±0.1–0.2 mm) can dominate "
+                                            "this rate. Treat it as indicative and repeat the measurement.")
+                                if avail_ut <= 0:
+                                    st.error("🔴 The latest thickness is at or below the minimum required wall — "
+                                             "fitness-for-service review required.")
+                                if calib < 0.8:
+                                    st.success(f"✅ The model is conservative here: it predicts {(1 / calib - 1) * 100:.0f}% "
+                                               f"above the measured rate." if calib > 0 else
+                                               "✅ No measurable wall loss — the model is conservative.")
+                                elif calib <= 1.25:
+                                    st.success("✅ The model agrees with the measured rate within ±25%.")
+                                else:
+                                    st.error(f"🔴 The model UNDER-predicts by {(calib - 1) * 100:.0f}% — plan with the measured rate "
+                                             f"and review the inhibition program.")
+ 
+                                extras["ut"] = {"t1": float(ut_t1), "t2": float(ut_t2), "years": float(ut_years),
+                                                "rate_m": float(rate_m), "rate_model": float(rate), "calib": float(calib),
+                                                "gov_rate": float(gov_rate), "life_gov": float(life_gov),
+                                                "interval": float(interval)}
+ 
+                    # 3) Defect assessment (modified B31G)
+                    with st.expander("🔩 Pit / Metal-Loss Defect Assessment (modified B31G)", expanded=False):
+                        bg_on = st.checkbox("Assess a measured pit / corrosion defect", key=f"{key_prefix}_adv_b31g_on")
+                        if bg_on:
+                            if v.get("material") in ("Stainless 316L", "Duplex 2205"):
+                                st.warning("B31G applies to carbon / low-alloy line pipe. Results are not valid for "
+                                           "stainless or duplex.")
+                            bgc1, bgc2, bgc3 = st.columns(3)
+                            bg_od = bgc1.number_input("Pipe outside diameter (mm)", min_value=20.0, max_value=2000.0,
+                                                      value=float(round(v.get("diameter", 6.0) * 25.4 + 2 * v["wt"], 1)),
+                                                      step=1.0, key=f"{key_prefix}_adv_bg_od")
+                            bg_smys = bgc2.number_input("SMYS (MPa)", min_value=100.0, max_value=800.0,
+                                                        value=float(SMYS_MPA.get(v.get("material"), 359)),
+                                                        step=1.0, key=f"{key_prefix}_adv_bg_smys")
+                            bg_maop = bgc3.number_input("MAOP / operating pressure (psi)", min_value=1.0, max_value=20000.0,
+                                                        value=float(max(v.get("pressure", 1000), 1)),
+                                                        step=10.0, key=f"{key_prefix}_adv_bg_maop")
+                            bgc4, bgc5, bgc6 = st.columns(3)
+                            bg_d0 = bgc4.number_input("Defect depth (mm)", min_value=0.0, max_value=float(v["wt"]),
+                                                      value=round(float(v["wt"]) * 0.2, 1), step=0.1,
+                                                      key=f"{key_prefix}_adv_bg_d0")
+                            bg_len = bgc5.number_input("Defect length (mm)", min_value=1.0, max_value=2000.0,
+                                                       value=50.0, step=5.0, key=f"{key_prefix}_adv_bg_len")
+                            bg_mult = bgc6.number_input("Pit growth ÷ uniform rate", min_value=0.5, max_value=10.0,
+                                                        value=1.0, step=0.5, key=f"{key_prefix}_adv_bg_mult")
+                            bg_req = st.number_input("Required safety margin (Pf ÷ MAOP)", min_value=1.0, max_value=3.0,
+                                                     value=1.39, step=0.01, key=f"{key_prefix}_adv_bg_req")
+                            st.caption("Uses the nominal wall from the Prediction inputs. Pitting often grows 2–5× faster than "
+                                       "uniform corrosion — set the growth multiplier from inspection data when available. "
+                                       "1.39 = 1 ÷ 0.72 design factor.")
+ 
+                            bg_t = float(v["wt"])
+                            pf0, M0, dt0 = b31g_modified_failure_pressure(bg_od, bg_t, bg_smys, bg_d0, bg_len)
+                            maop_mpa = bg_maop * 0.00689476
+                            margin0 = pf0 / maop_mpa if maop_mpa > 0 else float("inf")
+                            rate_use = rate
+                            if extras.get("ut"):
+                                rate_use = max(rate, extras["ut"]["rate_m"])
+                            growth = rate_use * bg_mult
+                            bg_rows, bg_limit = b31g_projection(bg_od, bg_t, bg_smys, bg_d0, bg_len, bg_maop,
+                                                                growth, bg_req)
+ 
+                            q1, q2, q3, q4 = st.columns(4)
+                            q1.metric("Defect depth ÷ wall", f"{dt0 * 100:.1f}%")
+                            q2.metric("Failure pressure Pf", f"{pf0 / 0.00689476:,.0f} psi")
+                            q3.metric("Safety margin Pf ÷ MAOP", f"{margin0:.2f}")
+                            q4.metric("Years to limit", "> 40" if bg_limit is None else f"{bg_limit:.1f}")
+ 
+                            if dt0 > 0.80:
+                                st.error("🔴 Defect is deeper than 80% of the wall — outside B31G validity. Repair or replace.")
+                            elif margin0 < bg_req:
+                                st.error(f"🔴 Safety margin {margin0:.2f} is below the required {bg_req:.2f} — "
+                                         f"reduce pressure or repair now.")
+                            elif bg_limit is not None and bg_limit <= 5:
+                                st.warning(f"⚠️ The defect reaches the limit in about {bg_limit:.1f} years at "
+                                           f"{growth:.2f} mm/yr growth — plan repair or re-inspection.")
+                            else:
+                                st.success("✅ The defect is acceptable now, and stays acceptable for the projected period "
+                                           "at the assumed growth rate." if bg_limit is None else
+                                           f"✅ Acceptable now; reaches the limit in about {bg_limit:.1f} years.")
+ 
+                            bg_df = pd.DataFrame(bg_rows)
+                            fig_bg = go.Figure()
+                            fig_bg.add_trace(go.Scatter(x=bg_df["Year"], y=bg_df["Margin"], mode="lines",
+                                                        line=dict(color="#2e86c1", width=3), name="Pf ÷ MAOP"))
+                            fig_bg.add_hline(y=bg_req, line_dash="dash", line_color="#e74c3c",
+                                             annotation_text=f"Required {bg_req:.2f}", annotation_position="top right")
+                            fig_bg.update_layout(
+                                title="Safety margin vs time (defect growth)",
+                                xaxis_title="Year", yaxis_title="Pf ÷ MAOP",
+                                template="plotly_dark", paper_bgcolor="#1a2530", plot_bgcolor="#1a2530",
+                                showlegend=False, height=320, margin=dict(l=50, r=30, t=60, b=50)
+                            )
+                            st.plotly_chart(fig_bg, use_container_width=True)
+ 
+                            extras["b31g"] = {"od": float(bg_od), "t": bg_t, "smys": float(bg_smys), "d0": float(bg_d0),
+                                              "length": float(bg_len), "dt0": float(dt0), "pf_psi": float(pf0 / 0.00689476),
+                                              "maop": float(bg_maop), "margin0": float(margin0), "required": float(bg_req),
+                                              "limit_year": bg_limit}
+ 
+                    # 4) Basis & validation status
+                    with st.expander("📚 Model basis, assumptions & validation status", expanded=False):
+                        st.markdown(f"""
+                    **Engine version:** {ENGINE_VERSION} | **Run ID:** {extras['run_id']}
+ 
+                    - **Base model:** de Waard-Milliams (1991) CO₂ correlation with fugacity correction, then pH, H₂S, inhibitor,
+                      coating, CP, fluid, material, water-cut, velocity and chloride factors.
+                                        - **Calibrated items:** FeCO₃ scale credit, residual-film synergy and the multiphase field factor are
+                      engineering calibrations, not first-principles physics.
+                    - **Validation status:** not yet validated against measured field data for this line. Enter two UT readings
+                      above to compare the model with reality.
+                    - **Defect assessment:** modified B31G (0.85dL) — corrosion metal loss in carbon / low-alloy pipe only.
+                    - **Use:** engineering decision-support. It does not replace a qualified corrosion engineer.
+                    """)
+ 
+ 
                     sensdf = sensitivity_analysis(v, rate)
                     target_rate = v["wt"] / life if life > 0 else 0.2
                     optdose, optrate, *_ = find_optimal_dose(v, target_rate)
                     optqtday = optdose * v.get("dose_water_bbl", 100) * 0.00035
  
-                    word_file = make_word_report(
+                    word_file = make_word_report_plus(
                         projdf, wt, rate, life, v, steps,
-                        None, sensdf, optdose, optqtday, risk
+                        None, sensdf, optdose, optqtday, risk, extras
                     )
  
                     st.download_button(
@@ -2629,6 +3258,38 @@ elif page == "📊 Multi-Well Dashboard":
                 st.download_button("📥 Download All Saved Results (CSV)",
                                    data=f, file_name=csv_file,
                                    mime="text/csv", key="dl_dash")
+ 
+elif page == "🛡️ Audit Log":
+    render_header()
+    st.header("🛡️ Audit Log — Admin Only")
+    if st.session_state.get("username") != "admin":
+        st.error("Admin access only.")
+    elif not os.path.exists(AUDIT_FILE):
+        st.info("No activity recorded yet.")
+    else:
+        try:
+            alog = pd.read_csv(AUDIT_FILE, dtype=str).fillna("")
+        except Exception as e:
+            st.error(f"❌ Could not read the audit log: {e}")
+            alog = pd.DataFrame()
+        if len(alog):
+            ev_pick = st.multiselect("Filter by event", sorted(alog["Event"].unique()))
+            usr_pick = st.multiselect("Filter by user", sorted(alog["User"].unique()))
+            view = alog
+            if ev_pick:
+                view = view[view["Event"].isin(ev_pick)]
+            if usr_pick:
+                view = view[view["User"].isin(usr_pick)]
+            a1, a2, a3 = st.columns(3)
+            a1.metric("Events", len(view))
+            a2.metric("Failed logins", int((view["Event"] == "login_failed").sum()))
+            a3.metric("Lock-outs", int((view["Event"] == "login_locked").sum()))
+            st.dataframe(view.iloc[::-1].head(500), use_container_width=True)
+            st.download_button("📥 Download Audit Log (CSV)",
+                               data=alog.to_csv(index=False).encode("utf-8"),
+                               file_name="corzynth_audit_log.csv", mime="text/csv",
+                               key="dl_audit")
+            st.caption("Shows the latest 500 matching events. Passwords are never logged.")
  
 elif page == "ℹ️ About":
     render_header()
